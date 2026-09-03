@@ -1077,6 +1077,8 @@ function renderEntropleSolve(answer, context) {
 }
 
 // Waits until #solveCard first scrolls into view before playing the reveal animation.
+// Falls back to a timer so the tiles never get stuck invisible if the observer
+// never fires (e.g. the card is taller than the viewport, or already mid-layout).
 function armSolveReveal() {
   const card = document.querySelector("#solveCard");
   if (!card) return;
@@ -1086,20 +1088,32 @@ function armSolveReveal() {
     return;
   }
 
+  let fired = false;
+  const fire = () => {
+    if (fired) return;
+    fired = true;
+    triggerSolveAnimation();
+    if (solveObserver) {
+      solveObserver.disconnect();
+      solveObserver = null;
+    }
+    clearTimeout(fallbackTimer);
+  };
+
   solveObserver = new IntersectionObserver(
     (entries) => {
       entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          triggerSolveAnimation();
-          solveObserver.disconnect();
-          solveObserver = null;
-        }
+        if (entry.isIntersecting || entry.intersectionRatio > 0) fire();
       });
     },
-    { threshold: 0.3 }
+    { threshold: 0 }
   );
 
   solveObserver.observe(card);
+
+  // Defensive fallback: guarantees the reveal plays even if the observer
+  // never reports an intersection (zero-height element at observe time, etc).
+  const fallbackTimer = setTimeout(fire, 600);
 }
 
 function buildSolveBoard(steps) {
