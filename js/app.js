@@ -967,10 +967,12 @@ async function renderDefinition(answer) {
   }
 }
 
-// Pure Shannon-entropy solve, unconstrained by Hard Mode, independent of the user's guesses.
+// Pure Shannon-entropy solve, independent of the user's guesses. Honors Hard Mode when active,
+// so suggested guesses stay legal (must reuse all previously revealed green/yellow letters).
 function simulateOptimalSolve(answer) {
   let candidates = words.answers.slice();
   const steps = [];
+  let hardHistory = [];
 
   for (let guessNum = 1; guessNum <= 6; guessNum++) {
     const before = candidates.length;
@@ -979,7 +981,12 @@ function simulateOptimalSolve(answer) {
     if (candidates.length === 1) {
       guess = candidates[0];
     } else {
-      const best = findBestGuesses(candidates, 1, null, words.guesses);
+      const best = findBestGuesses(
+        candidates,
+        1,
+        solveMode === "hard" ? hardHistory : null,
+        words.guesses
+      );
       guess = best.top[0].word;
       bits = best.top[0].bits;
       searched = best.searched;
@@ -987,6 +994,7 @@ function simulateOptimalSolve(answer) {
 
     const code = feedbackCode(guess, answer);
     const marks = feedback(guess, answer);
+    hardHistory = [...hardHistory, { guess, code }];
     candidates = narrowCandidates(candidates, guess, code);
 
     const solved = guess === answer;
