@@ -1,0 +1,166 @@
+<!-- Entrople, Credit: Antwaun Tune -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Entrople: The Entropy-Driven Wordle Analyzer</title>
+  <meta name="description" content="Entrople turns a Wordle solve into a real entropy breakdown: live candidate narrowing, expected information per guess, and the mathematically optimal route.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23171a16'/%3E%3Crect x='4' y='4' width='10' height='10' fill='%234f7d5b'/%3E%3Crect x='18' y='4' width='10' height='10' fill='%23c39a3d'/%3E%3Crect x='4' y='18' width='10' height='10' fill='%23c39a3d'/%3E%3Crect x='18' y='18' width='10' height='10' fill='%234f7d5b'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#" aria-label="Entrople home">
+      <span class="mini-grid" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <span>ENTROPLE</span>
+    </a>
+    <span class="method" id="dataStatus">Loading live word data…</span>
+  </header>
+
+  <div class="creator-bar">
+    <span>Created by <strong>Antwaun Tune</strong></span>
+    <a href="https://github.com/Paparoni" target="_blank" rel="noopener">github.com/Paparoni</a>
+    <a href="mailto:tuneantwaun@gmail.com">tuneantwaun@gmail.com</a>
+  </div>
+
+  <main>
+    <section class="intro">
+      <p class="eyebrow">SOLVE ANALYZER / 01</p>
+      <h1>How good was your<br><span>Wordle, really?</span></h1>
+      <p class="lede">Enter the answer and your guesses. Entrople scores the solve against a live word pool, narrows the real candidate space guess by guess, and shows the entropy math behind your route, not just a summary.</p>
+    </section>
+
+    <section class="workspace" aria-label="Wordle analyzer">
+      <form id="analyzerForm" class="entry-panel">
+        <div class="field-head">
+          <div><span class="step">01</span><h2>Enter your solve</h2></div>
+          <button type="button" id="clearBtn" class="text-btn">CLEAR</button>
+        </div>
+
+        <label for="answer">THE ANSWER</label>
+        <div class="answer-wrap"><input id="answer" name="answer" maxlength="5" value="BROTH" autocomplete="off" spellcheck="false" aria-describedby="answerHelp"><span>5 LETTERS</span></div>
+        <p id="answerHelp" class="hint">Used to calculate official Wordle-style feedback and to narrow the live candidate pool.</p>
+
+        <div class="guess-label"><label>YOUR GUESSES</label><span id="guessCount">3 / 6</span></div>
+        <div id="guessList" class="guess-list"></div>
+        <button type="button" id="addGuess" class="add-btn">＋ ADD ANOTHER GUESS</button>
+        <button type="submit" class="analyze-btn">ANALYZE MY SOLVE <span>→</span></button>
+        <p id="error" class="error" role="alert"></p>
+      </form>
+
+      <section id="results" class="results" aria-live="polite">
+        <div class="result-head">
+          <div><span class="step">02</span><h2>Your breakdown</h2></div>
+          <span id="verdict" class="verdict">STRONG SOLVE</span>
+        </div>
+
+        <div id="board" class="board" aria-label="Wordle result grid"></div>
+
+        <div class="metric-grid">
+          <article class="metric primary"><p>SOLVED IN</p><strong id="solvedIn">3</strong><span>of 6 guesses</span></article>
+          <article class="metric"><p>LETTERS TESTED</p><strong id="lettersTested">11</strong><span id="alphabetCoverage">42.3% of alphabet</span></article>
+          <article class="metric"><p>ANSWER FOUND</p><strong id="answerFound">80%</strong><span>before final guess</span></article>
+          <article class="metric"><p>GUESSES SPARED</p><strong id="spared">3</strong><span>room left on board</span></article>
+        </div>
+
+        <article class="math-card">
+          <div class="math-title"><p>THE MATH</p><span>INFORMATION THEORY</span></div>
+          <div class="equation"><span>Information needed</span><div id="eqMain">I = log<sub>2</sub>(<span id="poolSizeLabel">2,309</span>)</div><b id="bits">≈ 11.17 bits</b></div>
+          <p id="mathCopy">Starting from the classic 2,309-word answer set, identifying one exact answer requires about 11.17 bits of information.</p>
+        </article>
+
+        <article class="route-card">
+          <div class="math-title"><p>YOUR ROUTE</p><span>GUESS BY GUESS</span></div>
+          <div id="route"></div>
+        </article>
+
+        <article class="math-card trap-card hidden" id="trapCard">
+          <div class="math-title"><p>TRAP DETECTOR</p><span>SWAP-FAMILY ANALYSIS</span></div>
+          <p class="deep-intro">Flags any point in your solve where several live candidates agreed on almost the whole word and differed by only one or two letters: the "BATCH / CATCH / HATCH / MATCH / WATCH" situation, where guessing turns into near-blind trial and error.</p>
+          <div id="trapBody"></div>
+        </article>
+
+        <article class="math-card deep-card" id="deepCard">
+          <div class="math-title"><p>DEEP MATH</p><span>CANDIDATE NARROWING &amp; ENTROPY</span></div>
+          <p class="deep-intro">For each guess: how many real answers were still possible before and after, the actual bits of information gained, the entropy that guess was <em>expected</em> to yield against the live candidate pool, the shape of the resulting partition, and the strongest guess Entrople could find for that step.</p>
+
+          <div class="mode-toggle" role="group" aria-label="Best-guess search mode">
+            <button type="button" class="mode-btn active" data-mode="hard" id="modeHard" title="Hard Mode (default): best guess suggestions must satisfy every green, yellow, and gray clue revealed by prior guesses, the same rule Wordle's own Hard Mode enforces.">HARD MODE</button>
+            <button type="button" class="mode-btn" data-mode="easy" id="modeEasy" title="Normal Mode: best guess suggestions ignore prior clues and always show the single highest entropy word in the whole dictionary, matching Wordle's default, non Hard, mode.">EASY MODE</button>
+          </div>
+
+          <div class="formula-ref" id="formulaRef">
+            <p class="formula-ref-title">FORMULA REFERENCE</p>
+            <div class="formula-grid">
+              <div class="formula-item"><span>Pattern probability</span><div id="fPattern"></div></div>
+              <div class="formula-item"><span>Shannon entropy of a guess</span><div id="fEntropy"></div></div>
+              <div class="formula-item"><span>Actual information gained</span><div id="fActual"></div></div>
+              <div class="formula-item"><span>Expected candidates remaining</span><div id="fExpectedRemain"></div></div>
+              <div class="formula-item"><span>Partition variance / std. dev.</span><div id="fVariance"></div></div>
+              <div class="formula-item"><span>KL divergence vs. uniform split</span><div id="fKL"></div></div>
+              <div class="formula-item"><span>Information-theoretic minimum</span><div id="fMinGuesses"></div></div>
+            </div>
+            <p class="references-title">REFERENCES</p>
+            <ol class="references">
+              <li><span>Shannon, C. E.</span> (1948). <em>A Mathematical Theory of Communication.</em> Bell System Technical Journal, 27(3), 379–423. Source of the entropy formula H = −Σ pᵢ log₂ pᵢ used for every guess's expected information.</li>
+              <li><span>Kullback, S. &amp; Leibler, R. A.</span> (1951). <em>On Information and Sufficiency.</em> Annals of Mathematical Statistics, 22(1), 79–86. Source of the D<sub>KL</sub>(P‖U) divergence used to score how uneven a guess's pattern split is.</li>
+              <li><span>Aladaileh, T., Stephens, D., Alqaisi, M., &amp; Wu, C.</span> (2026). <em>Solving Wordle Using Information Theory.</em> Northeast Journal of Complex Systems, 8(1), Article 6. <a href="https://doi.org/10.63562/2577-8439.1146" target="_blank" rel="noopener">doi.org/10.63562/2577-8439.1146</a>. Entropy-based guess selection applied specifically to Wordle, the basis for Entrople's "best guess" search.</li>
+              <li><span>Mishra, N.</span> (2024). <em>Using Information Theory to Play Wordle as Optimally as Possible.</em> NHSJS. <a href="https://nhsjs.com/?p=12299" target="_blank" rel="noopener">nhsjs.com/?p=12299</a>. Worked derivation of expected-information guess ranking that Entrople's entropy search follows.</li>
+            </ol>
+          </div>
+
+          <div id="deepBody"></div>
+        </article>
+
+        <article class="math-card grade-card" id="gradeCard">
+          <div class="math-title"><p>FINAL GRADE</p><span>COMPOSITE SCORE</span></div>
+          <p class="deep-intro">A single score built from everything above: how much information you actually captured relative to the theoretical ceiling, how efficiently each guess performed against its own entropy, how evenly your guesses split the candidate space, and how many guesses you had to spare.</p>
+          <div class="grade-display">
+            <div class="grade-letter" id="gradeLetter">-</div>
+            <div class="grade-meta">
+              <div class="grade-score"><strong id="gradeScore">0</strong><span>/ 100</span></div>
+              <p id="gradeVerdict" class="grade-verdict"></p>
+            </div>
+          </div>
+          <div id="gradeBreakdown" class="grade-breakdown"></div>
+          <p class="deep-formula" id="gradeFormula"></p>
+        </article>
+
+        <article class="math-card define-card hidden" id="defineCard">
+          <div class="math-title"><p>THE ANSWER</p><span>DICTIONARY LOOKUP</span></div>
+          <p id="defineBody">Looking up a definition…</p>
+        </article>
+
+        <article class="math-card solve-card" id="solveCard">
+          <div class="math-title"><p>HOW ENTROPLE WOULD SOLVE</p><span>OPTIMAL ENTROPY ROUTE</span></div>
+          <p class="deep-intro">Set your actual guesses aside. This is the route pure Shannon-entropy search takes on its own: every guess is whichever legal word carries the single highest expected information against the live candidate pool, narrowed guess by guess by the real feedback this answer produces.</p>
+          <div id="solveBoard" class="solve-board" aria-label="Entrople's own solve, animated"></div>
+          <div id="solveSteps" class="solve-steps"></div>
+          <p id="solveSummary" class="solve-summary"></p>
+          <button type="button" id="solveReplay" class="text-btn solve-replay hidden">▶ REPLAY ANIMATION</button>
+        </article>
+
+        <div class="summary-card">
+          <p>THE BOTTOM LINE</p>
+          <h3 id="summaryTitle">An efficient three-guess solve.</h3>
+          <p id="summaryCopy"></p>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <footer>
+    <span>Built for curious solvers.</span>
+    <span>Answer pool &amp; dictionary loaded live from public word-list repositories · definitions via Free Dictionary API &amp; Wiktionary.</span>
+    <span class="credit">Created by <a href="https://github.com/Paparoni" target="_blank" rel="noopener">Antwaun Tune</a> · <a href="mailto:tuneantwaun@gmail.com">tuneantwaun@gmail.com</a></span>
+  </footer>
+  <script src="js/core/entropy-math.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
