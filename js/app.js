@@ -1,4 +1,7 @@
-/* Entrople, solve analyzer + entropy engine. Load js/core/entropy-math.js first.
+/* Entrople, UI layer: rendering, event wiring, word-data loading, and the
+   "today"/analyzer/simulation tabs. The actual entropy math and game-solving
+   engine live in js/core/entropy-math.js and js/core/simulation.js -- load
+   both of those first (see index.html).
    Word data: steve-kasica/wordle-words, tabatkins/wordle-list, dictionaryapi.dev, Wiktionary.
    Credit: Antwaun Tune */
 
@@ -1030,106 +1033,9 @@ async function renderDefinition(answer) {
   }
 }
 
-// Win-bonus-adjusted entropy solve, independent of the user's guesses. Honors Hard Mode
-// when active, so suggested guesses stay legal (must reuse all previously revealed
-// green/yellow letters); ranking within that legal set uses adjustedBits (see
-// entropy-math.js: guessEntropy) so a guess that could itself win outright is never
-// just tied with an equally-splitting guess that can't be the answer.
-function simulateOptimalSolve(answer) {
-  let candidates = words.answers.slice();
-  // Guards against an answer that isn't tagged as a confirmed historical answer
-  // in the live word list (still lets the solve converge instead of stalling).
-  if (!candidates.includes(answer)) candidates.push(answer);
-  const steps = [];
-  let hardHistory = [];
-
-  for (let guessNum = 1; guessNum <= 6; guessNum++) {
-    const before = candidates.length;
-    let guess, bits = 0, searched = "candidate pool";
-
-    if (candidates.length === 1) {
-      guess = candidates[0];
-    } else {
-      const best = findBestGuesses(
-        candidates,
-        1,
-        solveMode === "hard" ? hardHistory : null,
-        words.guesses
-      );
-      guess = best.top[0].word;
-      bits = best.top[0].bits;
-      searched = best.searched;
-    }
-
-    const code = feedbackCode(guess, answer);
-    const marks = feedback(guess, answer);
-    hardHistory = [...hardHistory, { guess, code }];
-    candidates = narrowCandidates(candidates, guess, code);
-
-    const solved = guess === answer;
-    steps.push({ guess, marks, before, after: candidates.length, bits, searched, solved });
-    if (solved) break;
-  }
-
-  return steps;
-}
-
-// Same search as simulateOptimalSolve, but keeps each step's full entropy-math
-// profile (bucket stats, KL divergence, win-bonus breakdown) and the live
-// candidate pool at that point, so the caller can render a full math breakdown
-// alongside the board rather than just the summary line.
-function simulateOptimalSolveDeep(answer, candidatePool) {
-  let candidates = (candidatePool || words.answers).slice();
-  if (!candidates.includes(answer)) candidates.push(answer);
-
-  const steps = [];
-  let hardHistory = [];
-
-  for (let guessNum = 1; guessNum <= 6; guessNum++) {
-    const candidatesBefore = candidates;
-    const before = candidates.length;
-    let guess, profile;
-
-    if (candidates.length === 1) {
-      guess = candidates[0];
-      profile = guessPartitionProfile(guess, candidates);
-    } else {
-      const best = findBestGuesses(
-        candidates,
-        1,
-        solveMode === "hard" ? hardHistory : null,
-        words.guesses
-      );
-      guess = best.top[0].word;
-      profile = guessPartitionProfile(guess, candidates);
-    }
-
-    const code = feedbackCode(guess, answer);
-    const marks = feedback(guess, answer);
-    hardHistory = [...hardHistory, { guess, code }];
-    candidates = narrowCandidates(candidates, guess, code);
-
-    const solved = guess === answer;
-    const after = Math.max(candidates.length, 1);
-    const actualBits = Math.log2(before) - Math.log2(after);
-
-    steps.push({
-      guess,
-      marks,
-      before,
-      after: candidates.length,
-      candidatesBefore,
-      profile,
-      actualBits,
-      bits: profile.bits,
-      solved,
-    });
-
-    if (solved) break;
-  }
-
-  return steps;
-}
+// simulateOptimalSolve and simulateOptimalSolveDeep now live in
+// js/core/simulation.js (loaded before this file), alongside the rest of
+// the game-playing engine.
 
 // Selectors for the two places the solve-board animation can render: the
 // analyzer tab's "How Entrople Would Solve" card, and the "today" tab's own
@@ -1591,6 +1497,441 @@ async function initTodaySolve() {
   finishTodaySolve(puzzle.solution.toUpperCase(), puzzle);
 }
 
+/* --- Deep Simulation tab ---
+   Fixes a different opening guess per simulated game, then hands the rest of
+   the game to Entrople's own win-bonus-adjusted entropy search, and reports
+   how many of those games win inside six guesses. The batch loop runs in a
+   Web Worker (js/core/simulation-worker.js) so a large sample doesn't freeze
+   the tab; the main thread only accumulates progress and renders results. */
+
+// A hand-picked spread of strong, average, and deliberately weak openers
+// (duplicate letters, rare letters), so a small default run still shows a
+// realistic mix of fast wins and the odd near-failure.
+const SIM_CURATED_OPENERS = [
+  "SALET", "CRANE", "TRACE", "SLATE", "CRATE", "SOARE", "ROATE", "RAISE", "ARISE", "IRATE",
+  "STARE", "TEARS", "LEAST", "CARTE", "ADIEU", "AUDIO", "LATER", "ALTER", "STORE", "SNARE",
+  "SHARE", "SPARE", "SHIRE", "SHONE", "STONE", "TONES", "NOTES", "SAINT", "STAIN", "RATIO",
+  "RADIO", "MEDIA", "IDEAL", "OCEAN", "UNION", "ROUTE", "MOUSE", "HOUSE", "PLANE", "PLATE",
+  "GRAPE", "GRACE", "BRAVE", "BRAKE", "DRIVE", "PRIDE", "PRIME", "CRIME", "CHASE", "PHASE",
+  "PULSE", "EPOXY", "EXTRA", "EXCEL", "EQUAL", "EXILE", "EERIE", "LEVEL", "RADAR", "TOOTH",
+  "ARENA", "GEESE", "MADAM", "QUEUE", "GAUGE",
+];
+
+const simAnswerEl = document.querySelector("#simAnswer");
+const simPoolEl = document.querySelector("#simPool");
+const simSampleEl = document.querySelector("#simSample");
+const simSampleMaxEl = document.querySelector("#simSampleMax");
+const simPoolHintEl = document.querySelector("#simPoolHint");
+const simEstimateEl = document.querySelector("#simEstimate");
+const simErrorEl = document.querySelector("#simError");
+const simForm = document.querySelector("#simForm");
+const simRunBtn = document.querySelector("#simRunBtn");
+const simCancelBtn = document.querySelector("#simCancelBtn");
+const simStatusEl = document.querySelector("#simStatus");
+const simProgressWrap = document.querySelector("#simProgressWrap");
+const simProgressFill = document.querySelector("#simProgressFill");
+const simProgressLabel = document.querySelector("#simProgressLabel");
+const simEmptyEl = document.querySelector("#simEmpty");
+const simSummaryEl = document.querySelector("#simSummary");
+
+let simMode = "hard"; // continuation mode after the fixed opener: "hard" | "easy"
+let simWorker = null;
+let simResults = [];
+let simRunToken = 0; // bumped on cancel/rerun so late worker messages are ignored
+let simCurrentAnswer = "";
+
+function simPoolForSource(source) {
+  if (source === "answers") return words.answers;
+  if (source === "dictionary") return [...words.guesses];
+  return SIM_CURATED_OPENERS;
+}
+
+function simPoolMeta(source) {
+  if (source === "answers") {
+    return {
+      size: words.status === "ready" ? words.answers.length : 2309,
+      label: "confirmed Wordle answers",
+      heavy: false,
+    };
+  }
+  if (source === "dictionary") {
+    return {
+      size: words.status === "ready" ? words.guesses.size : 14855,
+      label: "words in the full guess dictionary",
+      heavy: true,
+    };
+  }
+  return { size: SIM_CURATED_OPENERS.length, label: "hand-picked openers", heavy: false };
+}
+
+// pickRandomSample now lives in js/core/simulation.js.
+
+function updateSimControls() {
+  const meta = simPoolMeta(simPoolEl.value);
+  const defaultSample = simPoolEl.value === "curated" ? meta.size : Math.min(150, meta.size);
+
+  simSampleEl.max = meta.size;
+  simSampleEl.value = defaultSample;
+  simSampleMaxEl.textContent = `of ${meta.size.toLocaleString()}`;
+  simPoolHintEl.textContent =
+    simPoolEl.value === "curated"
+      ? "A hand-picked spread of strong, average, and weak openers, always fast."
+      : simPoolEl.value === "answers"
+      ? "Randomly sampled from the real answer list, without repeats."
+      : "Randomly sampled from every legal guess, including obscure words. Heaviest option.";
+
+  updateSimEstimate();
+}
+
+function updateSimEstimate() {
+  const meta = simPoolMeta(simPoolEl.value);
+  const sample = Math.max(1, Math.min(Number(simSampleEl.value) || 1, meta.size));
+
+  let msg = `About to run ${plural(sample, "simulated game")} against ${meta.label} (${meta.size.toLocaleString()} available).`;
+  if (sample >= 1000) msg += " That's a large batch, expect the run to take a while.";
+  else if (meta.heavy) msg += " This pool includes rarer words, so a few games may be slower to converge.";
+  simEstimateEl.textContent = msg;
+}
+
+simPoolEl.addEventListener("change", updateSimControls);
+simSampleEl.addEventListener("input", updateSimEstimate);
+
+document.querySelectorAll("#simForm .mode-toggle .mode-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (!simCancelBtn.classList.contains("hidden")) return; // ignore while a run is in progress
+    simMode = btn.dataset.simmode;
+    document
+      .querySelectorAll("#simForm .mode-toggle .mode-btn")
+      .forEach((b) => b.classList.toggle("active", b === btn));
+  });
+});
+
+function setSimRunning(isRunning) {
+  simRunBtn.classList.toggle("hidden", isRunning);
+  simCancelBtn.classList.toggle("hidden", !isRunning);
+  simProgressWrap.classList.toggle("hidden", !isRunning);
+  [simAnswerEl, simPoolEl, simSampleEl].forEach((el) => (el.disabled = isRunning));
+}
+
+// computeOpenerRoute now lives in js/core/simulation.js.
+
+function renderSimOpenerDetail(container, result) {
+  const steps = computeOpenerRoute(simCurrentAnswer, result.guesses);
+  const board = document.createElement("div");
+  board.className = "sim-mini-board";
+
+  steps.forEach((step) => {
+    const rowEl = document.createElement("div");
+    rowEl.className = "sim-mini-row";
+    step.guess.split("").forEach((letter, idx) => {
+      const tile = document.createElement("span");
+      tile.className = `tile ${step.marks[idx]}`;
+      tile.textContent = letter;
+      rowEl.appendChild(tile);
+    });
+    const meta = document.createElement("span");
+    meta.className = "sim-mini-meta";
+    meta.textContent = `${step.before.toLocaleString()} → ${step.after.toLocaleString()} candidates`;
+    rowEl.appendChild(meta);
+    board.appendChild(rowEl);
+  });
+
+  container.appendChild(board);
+
+  if (!result.solved) {
+    const last = steps[steps.length - 1];
+    const note = document.createElement("p");
+    note.className = "hint";
+    note.textContent =
+      `After all 6 guesses, ${plural(last.after, "candidate")} still fit every clue: the ` +
+      `win-bonus-adjusted entropy search ran out of guesses before it could isolate ${simCurrentAnswer}.`;
+    container.appendChild(note);
+  }
+}
+
+function buildSimOpenerRow(result) {
+  const row = document.createElement("div");
+  row.className = "sim-opener-row";
+
+  const head = document.createElement("button");
+  head.type = "button";
+  head.className = "sim-opener-head";
+  head.innerHTML = `
+    <span class="chev">▶</span>
+    <b>${result.opener}</b>
+    <span class="sim-opener-note">${
+      result.solved ? `solved in ${plural(result.guessCount, "guess")}` : "never converged"
+    }</span>
+    <span class="sim-opener-tag ${result.solved ? "won" : "failed"}">${result.solved ? "WIN" : "FAIL"}</span>
+  `;
+
+  const detail = document.createElement("div");
+  detail.className = "sim-opener-detail";
+  let built = false;
+
+  head.addEventListener("click", () => {
+    const isOpen = row.classList.toggle("open");
+    if (isOpen && !built) {
+      renderSimOpenerDetail(detail, result);
+      built = true;
+    }
+  });
+
+  row.appendChild(head);
+  row.appendChild(detail);
+  return row;
+}
+
+function finishSimulation(cancelled) {
+  setSimRunning(false);
+  simWorker = null;
+
+  const total = simResults.length;
+  simStatusEl.textContent = cancelled ? "CANCELLED" : "COMPLETE";
+
+  if (total === 0) {
+    simEmptyEl.textContent = cancelled
+      ? "Cancelled before any simulations finished."
+      : "No simulations ran.";
+    simEmptyEl.classList.remove("hidden");
+    simSummaryEl.classList.add("hidden");
+    return;
+  }
+
+  simEmptyEl.classList.add("hidden");
+
+  const wins = simResults.filter((r) => r.solved);
+  const fails = simResults.filter((r) => !r.solved);
+  const winRate = (wins.length / total) * 100;
+  const avgGuesses = wins.length
+    ? wins.reduce((sum, r) => sum + r.guessCount, 0) / wins.length
+    : null;
+
+  document.querySelector("#simWins").textContent = wins.length.toLocaleString();
+  document.querySelector("#simWinPct").textContent = `${winRate.toFixed(1)}% win rate`;
+  document.querySelector("#simTotal").textContent = total.toLocaleString();
+  document.querySelector("#simPoolLabel").textContent = cancelled ? "cancelled early" : "openers tested";
+  document.querySelector("#simAvg").textContent = avgGuesses ? avgGuesses.toFixed(2) : "–";
+  document.querySelector("#simFails").textContent = fails.length.toLocaleString();
+
+  const buckets = [1, 2, 3, 4, 5, 6];
+  const bucketCounts = buckets.map((n) => wins.filter((r) => r.guessCount === n).length);
+  const maxCount = Math.max(1, ...bucketCounts, fails.length);
+
+  const distEl = document.querySelector("#simDist");
+  distEl.innerHTML = "";
+
+  buckets.forEach((n, i) => {
+    const count = bucketCounts[i];
+    const row = document.createElement("div");
+    row.className = "sim-dist-row";
+    row.innerHTML = `
+      <span>${plural(n, "guess")}</span>
+      <div class="sim-dist-bar-track"><div class="sim-dist-bar-fill" style="width:${(count / maxCount) * 100}%"></div></div>
+      <span class="count">${count.toLocaleString()}</span>
+    `;
+    distEl.appendChild(row);
+  });
+
+  const failRow = document.createElement("div");
+  failRow.className = "sim-dist-row failed";
+  failRow.innerHTML = `
+    <span>Never solved</span>
+    <div class="sim-dist-bar-track"><div class="sim-dist-bar-fill" style="width:${(fails.length / maxCount) * 100}%"></div></div>
+    <span class="count">${fails.length.toLocaleString()}</span>
+  `;
+  distEl.appendChild(failRow);
+
+  const sortedWins = [...wins].sort(
+    (a, b) => a.guessCount - b.guessCount || a.opener.localeCompare(b.opener)
+  );
+  const fastest = sortedWins.slice(0, 5);
+
+  const standoutIntro = document.querySelector("#simStandoutIntro");
+  standoutIntro.textContent = wins.length
+    ? `Fastest openers reached ${simCurrentAnswer} in as few as ${plural(
+        fastest[0].guessCount,
+        "guess"
+      )}. Tap any row for the full route.`
+    : "None of the tested openers reached a win this run.";
+
+  const bestEl = document.querySelector("#simBest");
+  bestEl.innerHTML = "";
+  fastest.forEach((r) => bestEl.appendChild(buildSimOpenerRow(r)));
+
+  const failCard = document.querySelector("#simFailCard");
+  const failListEl = document.querySelector("#simFailList");
+  failListEl.innerHTML = "";
+
+  if (fails.length) {
+    failCard.classList.remove("hidden");
+    const shown = fails.slice(0, 25);
+    shown.forEach((r) => failListEl.appendChild(buildSimOpenerRow(r)));
+    if (fails.length > shown.length) {
+      const note = document.createElement("p");
+      note.className = "hint";
+      note.textContent = `+ ${(fails.length - shown.length).toLocaleString()} more opener(s) that never converged (showing the first ${shown.length}).`;
+      failListEl.appendChild(note);
+    }
+  } else {
+    failCard.classList.add("hidden");
+  }
+
+  simSummaryEl.classList.remove("hidden");
+
+  if (cancelled) {
+    const note = document.createElement("p");
+    note.className = "sim-cancelled-note";
+    note.textContent = `Run cancelled after ${plural(
+      total,
+      "simulated game"
+    )}. The stats above reflect only what finished before you cancelled.`;
+    simSummaryEl.prepend(note);
+  }
+}
+
+// simulateGameFromOpener now lives in js/core/simulation.js and is shared
+// verbatim by the worker (js/core/simulation-worker.js, via importScripts)
+// and the main-thread fallback below -- there is exactly one implementation
+// of "play one game with a forced opener", not two copies to keep in sync.
+
+// Handles one worker-shaped message, whether it actually came from the
+// worker or from the main-thread fallback loop below, so both paths share
+// exactly one place that updates progress UI and finalizes results.
+function handleSimMessage(msg, token) {
+  if (token !== simRunToken) return; // stale message from a cancelled/replaced run
+
+  if (msg.type === "progress") {
+    simResults.push(...msg.batch);
+    const pct = Math.round((msg.done / msg.total) * 100);
+    simProgressFill.style.width = `${pct}%`;
+    simProgressLabel.textContent = `Simulated ${msg.done.toLocaleString()} of ${msg.total.toLocaleString()} (${pct}%)…`;
+  } else if (msg.type === "done") {
+    finishSimulation(false);
+  }
+}
+
+// Runs the exact same batch loop as the worker, but on the main thread,
+// yielding to the browser between batches so the tab doesn't lock up. Used
+// when Workers can't be constructed at all (browsers refuse to load a worker
+// script for a page opened directly as a file:// URL, with no web server
+// behind it) so the tab still works, just less smoothly.
+async function runSimulationOnMainThread(answer, openers, answerPool, fullDictionaryArr, hardMode, token) {
+  simStatusEl.textContent = "RUNNING (LOCAL)";
+  simProgressLabel.textContent =
+    "Background workers aren't available for a file opened directly from disk — running in this tab " +
+    `instead. Simulated 0 of ${openers.length.toLocaleString()}…`;
+  // Give the browser one paint before the (possibly heavy) synchronous work starts,
+  // so the note above is actually visible rather than instantly overwritten.
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  if (token !== simRunToken) return;
+
+  const fullDictionary = new Set(fullDictionaryArr);
+  const total = openers.length;
+  const BATCH = 5; // smaller than the worker's batch size, so the UI can repaint more often
+  let batch = [];
+
+  for (let i = 0; i < total; i++) {
+    if (token !== simRunToken) return; // cancelled mid-run
+
+    batch.push(simulateGameFromOpener(answer, openers[i], answerPool, fullDictionary, hardMode));
+
+    if (batch.length >= BATCH || i === total - 1) {
+      handleSimMessage({ type: "progress", batch, done: i + 1, total }, token);
+      batch = [];
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (token !== simRunToken) return; // cancelled during the yield
+    }
+  }
+
+  handleSimMessage({ type: "done", total }, token);
+}
+
+function startSimulation(answer, pool, sample, hardMode) {
+  simRunToken++;
+  const token = simRunToken;
+  simResults = [];
+  simCurrentAnswer = answer;
+  simWorker = null;
+
+  const openers = pool.length === sample ? pool.slice() : pickRandomSample(pool, sample);
+  const answerPool = words.answers;
+  const fullDictionaryArr = [...words.guesses];
+
+  simStatusEl.textContent = "RUNNING";
+  simEmptyEl.classList.add("hidden");
+  simSummaryEl.classList.add("hidden");
+  setSimRunning(true);
+  simProgressFill.style.width = "0%";
+  simProgressLabel.textContent = `Simulated 0 of ${openers.length.toLocaleString()}…`;
+
+  const fallBackToMainThread = () => {
+    if (simWorker) {
+      simWorker.terminate();
+      simWorker = null;
+    }
+    simResults = [];
+    runSimulationOnMainThread(answer, openers, answerPool, fullDictionaryArr, hardMode, token);
+  };
+
+  try {
+    simWorker = new Worker("js/core/simulation-worker.js");
+  } catch (err) {
+    // Most commonly a SecurityError from opening index.html as a file:// URL,
+    // where browsers refuse to load worker scripts at all.
+    console.warn("Entrople: could not start a simulation worker, running on the main thread instead", err);
+    simWorker = null;
+  }
+
+  if (!simWorker) {
+    runSimulationOnMainThread(answer, openers, answerPool, fullDictionaryArr, hardMode, token);
+    return;
+  }
+
+  simWorker.onmessage = (event) => handleSimMessage(event.data, token);
+
+  simWorker.onerror = (err) => {
+    if (token !== simRunToken) return;
+    console.warn("Entrople: simulation worker failed at runtime, falling back to the main thread", err);
+    fallBackToMainThread();
+  };
+
+  simWorker.postMessage({ type: "run", answer, openers, answerPool, fullDictionaryArr, hardMode });
+}
+
+function cancelSimulation() {
+  simRunToken++; // invalidates any in-flight worker messages
+  if (simWorker) {
+    simWorker.terminate();
+    simWorker = null;
+  }
+  finishSimulation(true);
+}
+
+simForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  simErrorEl.textContent = "";
+
+  const answer = clean(simAnswerEl.value);
+  if (answer.length !== 5) {
+    simErrorEl.textContent = "Enter a 5-letter answer to simulate against.";
+    return;
+  }
+  if (words.status !== "ready") {
+    simErrorEl.textContent = "Deep simulation needs the live word dictionary, which isn't ready yet.";
+    return;
+  }
+
+  const pool = simPoolForSource(simPoolEl.value);
+  const sample = Math.max(1, Math.min(Number(simSampleEl.value) || 1, pool.length));
+
+  startSimulation(answer, pool, sample, simMode === "hard");
+});
+
+simCancelBtn.addEventListener("click", cancelSimulation);
+
+updateSimControls();
+
 let todayTabInitialized = false;
 
 document.querySelectorAll(".tab-btn").forEach((btn) => {
@@ -1653,5 +1994,8 @@ document.querySelector("#todaySolveReplay").addEventListener("click", () => {
 
 renderInputs();
 renderDataStatus();
-loadWordData().then(() => analyze());
+loadWordData().then(() => {
+  analyze();
+  updateSimControls();
+});
 analyze();

@@ -32,6 +32,7 @@
   <nav class="tabbar" role="tablist" aria-label="Entrople views">
     <button type="button" class="tab-btn active" id="tabBtnAnalyzer" data-tab="analyzer" role="tab" aria-selected="true" aria-controls="panel-analyzer">SOLVE ANALYZER</button>
     <button type="button" class="tab-btn" id="tabBtnToday" data-tab="today" role="tab" aria-selected="false" aria-controls="panel-today">ENTROPLE SOLVES TODAY'S WORDLE</button>
+    <button type="button" class="tab-btn" id="tabBtnSimulation" data-tab="simulation" role="tab" aria-selected="false" aria-controls="panel-simulation">DEEP SIMULATION</button>
   </nav>
 
   <main>
@@ -220,6 +221,93 @@
         </div>
       </section>
     </section>
+
+    <section class="tab-panel hidden" id="panel-simulation" role="tabpanel" aria-labelledby="tabBtnSimulation">
+      <section class="intro">
+        <p class="eyebrow">SOLVE ANALYZER / DEEP SIMULATION</p>
+        <h1>How many ways<br><span>can Entrople win?</span></h1>
+        <p class="lede">Pick an answer. Entrople fixes a different opening word for each simulated game, then takes over with its own win-bonus-adjusted entropy search for every guess after that, and reports how many of those games it wins inside six guesses, and where the entropy math runs out of room.</p>
+      </section>
+
+      <section class="workspace" aria-label="Deep simulation">
+        <form id="simForm" class="entry-panel">
+          <div class="field-head">
+            <div><span class="step">01</span><h2>Set up the run</h2></div>
+          </div>
+
+          <div class="sim-warning">
+            <p><strong>Heads up, this can get heavy.</strong> Every simulated game runs Entrople's full entropy search from scratch. Large samples (hundreds to thousands of games) can take a while and may make this tab sluggish while a run is in progress. You can cancel a run at any time.</p>
+          </div>
+
+          <label for="simAnswer">THE ANSWER</label>
+          <div class="answer-wrap"><input id="simAnswer" maxlength="5" placeholder="ANSWER" autocomplete="off" spellcheck="false"><span>5 LETTERS</span></div>
+          <p class="hint">The hidden word every simulated game is trying to reach.</p>
+
+          <label for="simPool">OPENING WORDS TO TEST</label>
+          <select id="simPool" class="sim-select">
+            <option value="curated">Curated opener set (~65 words, fast)</option>
+            <option value="answers">Every confirmed Wordle answer (~2,300 words)</option>
+            <option value="dictionary">Full guess dictionary (~14,800 words, heaviest)</option>
+          </select>
+          <p class="hint" id="simPoolHint">A hand-picked spread of strong, average, and weak openers, always fast.</p>
+
+          <label for="simSample">GAMES TO SIMULATE</label>
+          <div class="answer-wrap sim-sample-wrap"><input id="simSample" type="number" min="1" value="65"><span id="simSampleMax">of 65</span></div>
+          <p class="hint" id="simSampleHint">Randomly sampled from the pool above, without repeats.</p>
+
+          <div class="mode-toggle" role="group" aria-label="Continuation mode">
+            <button type="button" class="mode-btn active" data-simmode="hard" id="simModeHard" title="After the fixed opener, every later guess must satisfy all prior clues, matching Wordle's Hard Mode.">HARD MODE</button>
+            <button type="button" class="mode-btn" data-simmode="easy" id="simModeEasy" title="After the fixed opener, every later guess ignores prior clues and always takes the single highest entropy word in the dictionary.">EASY MODE</button>
+          </div>
+
+          <p class="hint" id="simEstimate"></p>
+
+          <button type="submit" class="analyze-btn" id="simRunBtn">RUN SIMULATION <span>→</span></button>
+          <button type="button" class="analyze-btn sim-cancel hidden" id="simCancelBtn">CANCEL RUN</button>
+          <p id="simError" class="error" role="alert"></p>
+        </form>
+
+        <section id="simResultsPanel" class="results" aria-label="Simulation results" aria-live="polite">
+          <div class="result-head">
+            <div><span class="step">02</span><h2>Simulation results</h2></div>
+            <span id="simStatus" class="verdict">READY</span>
+          </div>
+
+          <div id="simProgressWrap" class="sim-progress-wrap hidden">
+            <div class="sim-progress-bar"><div id="simProgressFill" class="sim-progress-fill"></div></div>
+            <p id="simProgressLabel" class="sim-progress-label">—</p>
+          </div>
+
+          <div id="simEmpty" class="deep-empty">Set up a run on the left and hit "Run Simulation" to see how many different openers Entrople can turn into a win, and which ones leave the entropy math short.</div>
+
+          <div id="simSummary" class="hidden">
+            <div class="metric-grid sim-metric-grid">
+              <article class="metric primary"><p>GAMES WON</p><strong id="simWins">0</strong><span id="simWinPct">0% win rate</span></article>
+              <article class="metric"><p>GAMES SIMULATED</p><strong id="simTotal">0</strong><span id="simPoolLabel">openers tested</span></article>
+              <article class="metric"><p>AVG GUESSES</p><strong id="simAvg">–</strong><span>among wins</span></article>
+              <article class="metric"><p>MATH FAILED</p><strong id="simFails">0</strong><span>never converged in 6</span></article>
+            </div>
+
+            <article class="math-card">
+              <div class="math-title"><p>SOLVE DISTRIBUTION</p><span>GUESSES TO WIN</span></div>
+              <div id="simDist" class="sim-dist"></div>
+            </article>
+
+            <article class="math-card">
+              <div class="math-title"><p>FASTEST OPENERS</p><span>TOP WIN-BONUS-ADJUSTED FINISHES</span></div>
+              <p class="deep-intro" id="simStandoutIntro"></p>
+              <div id="simBest" class="sim-opener-list"></div>
+            </article>
+
+            <article class="math-card hidden" id="simFailCard">
+              <div class="math-title"><p>WHERE THE ENTROPY MATH FAILED</p><span>NO WIN INSIDE 6 GUESSES</span></div>
+              <p class="deep-intro">These openers left the win-bonus-adjusted entropy search a candidate pool it couldn't cut down to one word within six guesses. Tap any of them for the full guess-by-guess route.</p>
+              <div id="simFailList" class="sim-opener-list"></div>
+            </article>
+          </div>
+        </section>
+      </section>
+    </section>
   </main>
 
   <footer>
@@ -228,6 +316,7 @@
     <span class="credit">Created by <a href="https://github.com/Paparoni" target="_blank" rel="noopener">Antwaun Tune</a> · <a href="mailto:tuneantwaun@gmail.com">tuneantwaun@gmail.com</a></span>
   </footer>
   <script src="js/core/entropy-math.js"></script>
+  <script src="js/core/simulation.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

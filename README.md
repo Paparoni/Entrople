@@ -7,6 +7,8 @@ You can either:
 
 - Walk through a real (or hypothetical) game guess by guess, and see how each guess narrowed the candidate pool.
 - Compare your guesses against the entropy-optimal picks the bot would have made at each step.
+- Watch Entrople solve today's real Wordle live, the moment it rolls over at midnight Eastern.
+- Run a **Deep Simulation**: fix an answer, fix a different opening word per game, and let Entrople's win-bonus-adjusted entropy search play out the rest. Batches of anywhere from a handful to thousands of games run in a background Web Worker and report a win rate, a guesses-to-solve distribution, and, most usefully, exactly which openers leave the entropy math short of a win inside six guesses. Large batches (especially against the full guess dictionary) are genuinely heavy client-side computation, so the tab warns up front and lets you cancel a run in progress.
 
 
 # Word data

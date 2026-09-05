@@ -169,5 +169,46 @@
 .spoiler-cover .analyze-btn:disabled{background:#55584d;cursor:progress}
 .spoiler-cover .analyze-btn:disabled:hover{background:#55584d}
 
+/* --- Deep Simulation --- */
+.hidden{display:none}
+.sim-warning{border:1px solid var(--orange);background:#fbeee7;padding:14px;margin:24px 0 4px}
+.sim-warning p{margin:0;font-size:11px;line-height:1.6;color:#7a3416}
+.sim-warning strong{color:var(--orange)}
+.sim-select{width:100%;border:1px solid var(--ink);background:#fff;padding:13px 14px;font:500 13px DM Mono,monospace;letter-spacing:.03em;border-radius:0;cursor:pointer}
+.sim-sample-wrap input{padding-right:78px;-moz-appearance:textfield}
+.sim-sample-wrap input::-webkit-outer-spin-button,.sim-sample-wrap input::-webkit-inner-spin-button{margin:0}
+#simEstimate{color:#5f625b;font-style:italic}
+.sim-cancel{background:var(--orange)}
+.sim-cancel:hover{background:#c94d24}
+.sim-progress-wrap{margin:0 0 26px}
+.sim-progress-bar{height:8px;background:#ecebe3;border:1px solid var(--line);overflow:hidden}
+.sim-progress-fill{height:100%;width:0%;background:var(--green);transition:width .18s ease}
+.sim-progress-label{font:10px DM Mono,monospace;color:#7a7c74;margin:8px 0 0}
+.sim-metric-grid{margin-bottom:0}
+.sim-dist{display:flex;flex-direction:column;gap:9px;margin:16px 0 0}
+.sim-dist-row{display:grid;grid-template-columns:88px 1fr 56px;align-items:center;gap:10px}
+.sim-dist-row>span:first-child{font:10px DM Mono,monospace;color:#6c6e68}
+.sim-dist-bar-track{height:14px;background:#ecebe3;border:1px solid var(--line)}
+.sim-dist-bar-fill{height:100%;background:var(--green)}
+.sim-dist-row.failed .sim-dist-bar-fill{background:var(--orange)}
+.sim-dist-row .count{text-align:right;font:11px DM Mono,monospace}
+.sim-opener-list{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+.sim-opener-row{border:1px solid var(--line);background:#f7f6f1}
+.sim-opener-head{display:grid;grid-template-columns:16px auto 1fr auto;gap:10px;align-items:center;padding:11px 13px;cursor:pointer;background:none;border:0;width:100%;text-align:left;font-family:inherit}
+.sim-opener-head b{font:600 13px DM Mono,monospace;letter-spacing:.06em}
+.sim-opener-head .sim-opener-note{font-size:11px;color:#6e706a}
+.sim-opener-head .sim-opener-tag{font:600 9px DM Mono,monospace;letter-spacing:.06em;padding:4px 8px;border-radius:9px;white-space:nowrap;justify-self:end}
+.sim-opener-tag.won{background:var(--green2);color:#1f4a2a}
+.sim-opener-tag.failed{background:#f3d9c9;color:#8a3a12}
+.sim-opener-head .chev{font-size:9px;color:#9a9c93;transition:transform .15s ease}
+.sim-opener-row.open .chev{transform:rotate(90deg)}
+.sim-opener-detail{display:none;padding:2px 13px 14px;border-top:1px dashed #deddd5}
+.sim-opener-row.open .sim-opener-detail{display:block}
+.sim-mini-board{display:flex;flex-direction:column;gap:5px;margin:12px 0 4px}
+.sim-mini-row{display:flex;gap:5px;align-items:center}
+.sim-mini-row .tile{width:30px;height:30px;font-size:13px}
+.sim-mini-row .sim-mini-meta{font:10px DM Mono,monospace;color:#7c7e77;margin-left:8px}
+.sim-cancelled-note{font-size:11px;color:var(--orange);margin:0 0 18px;padding:10px 12px;background:#fbeee7;border:1px solid var(--orange)}
+
 @media(max-width:900px){.intro{grid-template-columns:1fr;gap:26px}.workspace{grid-template-columns:1fr}.entry-panel{position:static}.intro h1{font-size:59px}}
-@media(max-width:580px){.topbar{height:60px}.method{display:none}main{padding:48px 15px}.intro{margin-bottom:35px}.intro h1{font-size:45px}.entry-panel,.results{padding:19px}.metric-grid{grid-template-columns:1fr 1fr}.metric:nth-child(2){border-right:0}.metric:nth-child(-n+2){border-bottom:1px solid var(--line)}.tile{width:46px;height:46px}.equation{grid-template-columns:1fr;gap:8px}.route-line{grid-template-columns:24px 65px 1fr}.route-line .score{display:none}.deep-stats{grid-template-columns:1fr}footer{flex-direction:column;gap:8px}.solve-board .tile{width:36px;height:36px;font-size:14px}.solve-step-line{grid-template-columns:24px 65px 1fr}.solve-step-line .score{display:none}.tabbar{padding:0 15px}.tab-btn{padding:14px 14px;font-size:10px}}
+@media(max-width:580px){.topbar{height:60px}.method{display:none}main{padding:48px 15px}.intro{margin-bottom:35px}.intro h1{font-size:45px}.entry-panel,.results{padding:19px}.metric-grid{grid-template-columns:1fr 1fr}.metric:nth-child(2){border-right:0}.metric:nth-child(-n+2){border-bottom:1px solid var(--line)}.tile{width:46px;height:46px}.equation{grid-template-columns:1fr;gap:8px}.route-line{grid-template-columns:24px 65px 1fr}.route-line .score{display:none}.deep-stats{grid-template-columns:1fr}footer{flex-direction:column;gap:8px}.solve-board .tile{width:36px;height:36px;font-size:14px}.solve-step-line{grid-template-columns:24px 65px 1fr}.solve-step-line .score{display:none}.tabbar{padding:0 15px}.tab-btn{padding:14px 14px;font-size:10px}.sim-opener-head{grid-template-columns:14px auto 1fr;grid-template-rows:auto auto}.sim-opener-head .sim-opener-tag{grid-column:1/-1;justify-self:start;margin-top:4px}}
