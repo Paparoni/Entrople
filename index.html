@@ -105,6 +105,7 @@
               <div class="formula-item"><span>Partition variance / std. dev.</span><div id="fVariance"></div></div>
               <div class="formula-item"><span>KL divergence vs. uniform split</span><div id="fKL"></div></div>
               <div class="formula-item"><span>Information-theoretic minimum</span><div id="fMinGuesses"></div></div>
+              <div class="formula-item"><span>Win-bonus adjusted score (best-guess ranking)</span><div id="fWinBonus"></div></div>
             </div>
             <p class="references-title">REFERENCES</p>
             <ol class="references">
@@ -112,6 +113,7 @@
               <li><span>Kullback, S. &amp; Leibler, R. A.</span> (1951). <em>On Information and Sufficiency.</em> Annals of Mathematical Statistics, 22(1), 79–86. Source of the D<sub>KL</sub>(P‖U) divergence used to score how uneven a guess's pattern split is.</li>
               <li><span>Aladaileh, T., Stephens, D., Alqaisi, M., &amp; Wu, C.</span> (2026). <em>Solving Wordle Using Information Theory.</em> Northeast Journal of Complex Systems, 8(1), Article 6. <a href="https://doi.org/10.63562/2577-8439.1146" target="_blank" rel="noopener">doi.org/10.63562/2577-8439.1146</a>. Entropy-based guess selection applied specifically to Wordle, the basis for Entrople's "best guess" search.</li>
               <li><span>Mishra, N.</span> (2024). <em>Using Information Theory to Play Wordle as Optimally as Possible.</em> NHSJS. <a href="https://nhsjs.com/?p=12299" target="_blank" rel="noopener">nhsjs.com/?p=12299</a>. Worked derivation of expected-information guess ranking that Entrople's entropy search follows.</li>
+              <li><span>Healy, A. D.</span> (2022). <em>On Optimal Strategies for Wordle.</em> <a href="http://www.alexhealy.net/papers/wordle.pdf" target="_blank" rel="noopener">alexhealy.net/papers/wordle.pdf</a>. Source of the win-bonus correction Entrople's best-guess ranking uses: assigning the all-green outcome a value of −1 bit (rather than the 0 a singleton bucket would otherwise get) so a guess that can win outright is never just tied with an equally-splitting guess that can't.</li>
             </ol>
           </div>
 

@@ -4,6 +4,7 @@
 const MAX_PATTERNS = 243; // 3^5 possible feedback patterns
 const MAX_BITS_PER_GUESS = Math.log2(MAX_PATTERNS);
 const VOWELS = "AEIOU";
+const WIN_CODE = 242; // base-3 code for GGGGG (all-correct), see feedbackCode
 
 function vowelsIn(word) {
   return [...new Set(word.split("").filter((ch) => VOWELS.includes(ch)))];
@@ -63,7 +64,11 @@ function feedbackCode(guess, answer) {
   return (((c0 * 3 + c1) * 3 + c2) * 3 + c3) * 3 + c4;
 }
 
-// Shannon entropy (bits) of `guess` against the current candidate pool.
+// Shannon entropy (bits) of `guess` against the current candidate pool, plus the
+// Healy win-bonus correction (see guessPartitionProfile below for the derivation).
+// Returns {bits, pWin, adjustedBits} rather than a bare number, since ranking by
+// raw entropy alone is exactly the case that lets two guesses with identical bits
+// come out equally "good" even when one of them can win outright and the other can't.
 const _patternCounts = new Int32Array(243);
 
 function guessEntropy(guess, candidates) {
@@ -83,10 +88,36 @@ function guessEntropy(guess, candidates) {
     bits -= p * Math.log2(p);
   }
 
-  return bits;
+  // p_win: probability the guess IS the answer, i.e. the (at most one) candidate
+  // that produces the all-green GGGGG pattern (code 242).
+  const pWin = _patternCounts[WIN_CODE] / total;
+
+  return { bits, pWin, adjustedBits: bits + pWin };
 }
 
-// Full partition profile (entropy, bucket stats, KL divergence) for a guess.
+// Full partition profile (entropy, bucket stats, KL divergence, win-bonus-adjusted
+// score) for a guess.
+//
+// Win-bonus correction (Healy, 2022, "On Optimal Strategies for Wordle"):
+// Plain Shannon entropy treats the GGGGG ("you win") bucket like any other bucket,
+// scored only by how much it shrinks the candidate set. But a guess that wins
+// outright is strictly better than one that merely narrows the field to the same
+// size without winning -- e.g. with only {PICKY, PIGGY} left, guessing CIGAR
+// distinguishes them perfectly (entropy = 1 bit) but guessing PICKY directly is
+// better, since it wins immediately with 50% probability instead of guaranteeing
+// a 3rd guess. Healy's fix: in the expected-remaining-entropy calculation, assign
+// the GGGGG bucket a value of log2(|S|) = -1 instead of the 0 it would otherwise
+// get for a singleton bucket. Carried through algebraically (see derivation below),
+// this is equivalent to simply adding p_win -- the probability the guess itself is
+// the answer -- on top of the ordinary entropy score:
+//
+//   adjustedBits = H(guess) + p_win,   p_win = Pr(guess is the hidden answer)
+//
+// Derivation: expected remaining entropy is ER(guess) = sum_i p_i * log2(n_i).
+// Substituting log2(1) = -1 for the win bucket instead of the natural 0 changes
+// ER by exactly -p_win. Since entropy H(guess) = log2(N) - ER(guess), a decrease
+// of p_win in ER is an increase of p_win in H. This is why the correction is just
+// "+p_win" and not some free parameter: it falls straight out of the substitution.
 function guessPartitionProfile(guess, candidates) {
   _patternCounts.fill(0);
   for (let i = 0; i < candidates.length; i++) {
@@ -119,8 +150,12 @@ function guessPartitionProfile(guess, candidates) {
   const variance =
     buckets.reduce((sum, n) => sum + (n - mean) * (n - mean), 0) / k;
 
+  const pWin = _patternCounts[WIN_CODE] / N;
+
   return {
     bits,
+    pWin,
+    adjustedBits: bits + pWin,
     bucketsUsed: k,
     expectedRemaining: sumSquares / N,
     maxBucket,
@@ -132,7 +167,12 @@ function guessPartitionProfile(guess, candidates) {
   };
 }
 
-// Top-N highest-entropy guesses; fullDictionary widens the pool once candidates are small; hardModeHistory restricts to Wordle Hard Mode.
+// Top-N guesses by win-bonus-adjusted entropy (see guessPartitionProfile for the
+// derivation); fullDictionary widens the pool once candidates are small;
+// hardModeHistory restricts to Wordle Hard Mode. Ranking by adjustedBits rather
+// than raw bits means a guess that could win immediately is never just tied with
+// an equally-splitting guess that can't ever be the answer -- it's ranked ahead
+// of it, in proportion to how likely that immediate win actually is.
 function findBestGuesses(candidates, topN = 5, hardModeHistory = null, fullDictionary = null) {
   const useFullDictionary = candidates.length <= 500 && fullDictionary && fullDictionary.size > 0;
   const basePool = useFullDictionary
@@ -155,9 +195,9 @@ function findBestGuesses(candidates, topN = 5, hardModeHistory = null, fullDicti
   let best = [];
 
   for (const guess of pool) {
-    const bits = guessEntropy(guess, candidates);
-    best.push({ word: guess, bits });
-    best.sort((a, b) => b.bits - a.bits);
+    const { bits, pWin, adjustedBits } = guessEntropy(guess, candidates);
+    best.push({ word: guess, bits, pWin, adjustedBits });
+    best.sort((a, b) => b.adjustedBits - a.adjustedBits);
     if (best.length > topN) best.pop();
   }
 

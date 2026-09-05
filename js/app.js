@@ -498,9 +498,14 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
         </div>
         <p class="deep-formula" id="${formulaId}"></p>
         <p class="deep-formula" id="${formulaId}-kl"></p>
+        <p class="deep-formula" id="${formulaId}-win"></p>
         <p class="deep-note">
           Best guess found for this step (searched ${step.best.hardModeApplied ? `${step.best.poolSize.toLocaleString()} legal words` : step.best.searched}):
-          <b>${bestGuess.word}</b> at ${fmtBits(bestGuess.bits)} expected. ${rankLabel}
+          <b>${bestGuess.word}</b> at ${fmtBits(bestGuess.bits)} raw entropy${
+        bestGuess.pWin > 0
+          ? `, win-bonus adjusted to ${fmtBits(bestGuess.adjustedBits)} (${(bestGuess.pWin * 100).toFixed(1)}% chance this guess IS the answer)`
+          : " (not itself a possible answer, so no win-bonus applies)"
+      }. ${rankLabel}
           The largest single bucket this guess could have landed in held ${p.maxBucket.toLocaleString()}
           candidates (mean bucket size across the ${p.bucketsUsed} realized patterns was
           ${p.mean.toFixed(1)}).
@@ -514,7 +519,7 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
                 const candProfile = guessPartitionProfile(cand.word, step.beforeCandidates);
                 const topProfile = guessPartitionProfile(step.best.top[0].word, step.beforeCandidates);
                 const gapFromTop =
-                  ci === 0 ? 0 : step.best.top[0].bits - cand.bits;
+                  ci === 0 ? 0 : step.best.top[0].adjustedBits - cand.adjustedBits;
                 const commonness = englishCommonnessTier(cand.word);
                 const priorLetters = evaluatedGuesses.slice(0, i).join("");
                 const candVowels = vowelsIn(cand.word);
@@ -527,29 +532,33 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
                           ? `, ${newCandVowels.length} not yet ruled in or out`
                           : ""
                       }${candVowels.length === newCandVowels.length ? ", all still open" : ""}`;
+                const winNote =
+                  cand.pWin > 0
+                    ? ` It's itself a live candidate, so it also carries a ${(cand.pWin * 100).toFixed(1)}% chance of winning outright this turn — worth +${cand.pWin.toFixed(3)} bits on top of its raw entropy of ${fmtBits(cand.bits)}.`
+                    : "";
                 let why;
                 if (ci === 0) {
-                  why = `Highest expected entropy of the ${step.best.hardModeApplied ? `${step.best.poolSize.toLocaleString()} legal words` : `${step.best.searched} searched`}. Spreads the ${step.before.toLocaleString()} candidates across ${candProfile.bucketsUsed} distinct outcomes, worst case leaving ${candProfile.maxBucket.toLocaleString()} words (${((candProfile.maxBucket / step.before) * 100).toFixed(1)}%) if the unluckiest pattern lands. Vowel-wise, it ${vowelNote}; with only 5 vowels in English against 21 consonants, that coverage is part of why the entropy math likes it.`;
+                  why = `Highest win-bonus-adjusted score of the ${step.best.hardModeApplied ? `${step.best.poolSize.toLocaleString()} legal words` : `${step.best.searched} searched`} (raw entropy ${fmtBits(candProfile.bits)}${cand.pWin > 0 ? `, adjusted ${fmtBits(candProfile.adjustedBits)}` : ""}). Spreads the ${step.before.toLocaleString()} candidates across ${candProfile.bucketsUsed} distinct outcomes, worst case leaving ${candProfile.maxBucket.toLocaleString()} words (${((candProfile.maxBucket / step.before) * 100).toFixed(1)}%) if the unluckiest pattern lands. Vowel-wise, it ${vowelNote}; with only 5 vowels in English against 21 consonants, that coverage is part of why the entropy math likes it.${winNote}`;
                 } else {
-                  why = `${fmtBits(gapFromTop)} behind the top pick. Splits into ${candProfile.bucketsUsed} outcomes with a worst case of ${candProfile.maxBucket.toLocaleString()} words (${((candProfile.maxBucket / step.before) * 100).toFixed(1)}%), ${
+                  why = `${fmtBits(gapFromTop)} behind the top pick on win-bonus-adjusted score. Splits into ${candProfile.bucketsUsed} outcomes with a worst case of ${candProfile.maxBucket.toLocaleString()} words (${((candProfile.maxBucket / step.before) * 100).toFixed(1)}%), ${
                     candProfile.bucketsUsed >= topProfile.bucketsUsed
                       ? "about as even a split as the top pick"
                       : "a somewhat less even split than the top pick"
-                  }. It ${vowelNote}.`;
+                  }. It ${vowelNote}.${winNote}`;
                 }
                 return `
                   <div class="next-best-row${isPlayed ? " played" : ""}">
                     <span class="nb-rank">#${ci + 1}</span>
                     <b class="nb-word">${cand.word}</b>
                     <span class="nb-commonness nb-commonness-${commonness.tier}" title="How commonly this word is used in everyday English, not how likely it is to be the Wordle answer">${commonness.label}</span>
-                    <span class="nb-bits">${fmtBits(cand.bits)}</span>
+                    <span class="nb-bits" title="${cand.pWin > 0 ? `raw entropy ${cand.bits.toFixed(3)} + win-bonus ${cand.pWin.toFixed(3)}` : "raw entropy (no win-bonus: not a live candidate)"}">${fmtBits(cand.adjustedBits)}</span>
                     ${isPlayed ? '<span class="nb-tag">you played this</span>' : ""}
                     <p class="nb-why">${why}</p>
                   </div>`;
               })
               .join("")}
           </div>
-          <p class="next-best-mode-note">The ranking itself is pure Shannon entropy. It doesn't weight a word by how likely it is to be the actual answer, only by how well it splits the candidate pool, so a rare word and a common word carrying the same expected bits rank identically. The commonness badge and vowel note per word above are tidbits, not separate scoring terms: the badge reflects how often the word is used in everyday English globally (Google Books Ngram data), not Wordle-answer likelihood. Vowel coverage is already fully priced into the entropy number itself (see the citations in the formula reference above), so an explicit vowel bonus on top would just double-count it.</p>
+          <p class="next-best-mode-note">The ranking is Shannon entropy plus a win-bonus correction (Healy, 2022): a guess that could itself be the answer gets +p<sub>win</sub> bits added on top of its raw entropy, since winning outright beats merely narrowing the field to the same size without winning. This is what breaks the old tie between two guesses carrying identical bits — the one that's a live candidate now outranks the one that isn't. It still doesn't weight a word by anything beyond that specific correction, so among words that are equally live candidates (or equally not), the ranking is unchanged. The commonness badge and vowel note per word above are tidbits, not separate scoring terms: the badge reflects how often the word is used in everyday English globally (Google Books Ngram data), not Wordle-answer likelihood. Vowel coverage is already fully priced into the entropy number itself (see the citations in the formula reference above), so an explicit vowel bonus on top would just double-count it.</p>
         </div>
       `;
 
@@ -567,6 +576,13 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
         `D_{KL}(P\\Vert U) = \\sum_i p_i \\log_2\\!\\dfrac{p_i}{1/243} = ${p.klDivergence.toFixed(
           3
         )}\\ \\text{bits}`
+      );
+
+      renderFormula(
+        `${formulaId}-win`,
+        `H'(\\text{${step.guess}}) = H(\\text{${step.guess}}) + p_{\\text{win}} = ${p.bits.toFixed(
+          3
+        )} + ${p.pWin.toFixed(3)} = ${p.adjustedBits.toFixed(3)}\\ \\text{bits}`
       );
     });
 
@@ -899,6 +915,10 @@ function renderFormulaReference() {
     "fMinGuesses",
     `n^{*} = \\left\\lceil \\dfrac{\\log_2 N_0}{\\log_2 243} \\right\\rceil`
   );
+  renderFormula(
+    "fWinBonus",
+    `H'(\\text{guess}) = H(\\text{guess}) + p_{\\text{win}}, \\quad p_{\\text{win}} = \\Pr(\\text{guess is the answer}) = \\dfrac{n_{\\text{GGGGG}}}{N}`
+  );
 }
 
 async function lookupFreeDictionary(word) {
@@ -967,7 +987,7 @@ async function renderDefinition(answer) {
   }
 }
 
-// Pure Shannon-entropy solve, unconstrained by Hard Mode, independent of the user's guesses.
+// Win-bonus-adjusted entropy solve, unconstrained by Hard Mode, independent of the user's guesses.
 function simulateOptimalSolve(answer) {
   let candidates = words.answers.slice();
   const steps = [];
