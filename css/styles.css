@@ -142,5 +142,32 @@
 .histogram em{flex:0 0 auto;align-self:center;font:9px DM Mono,monospace;color:#8a8c84;font-style:normal;margin-left:6px;white-space:nowrap}
 @media(max-width:580px){.formula-grid{grid-template-columns:1fr}.deep-stats-2{grid-template-columns:1fr}}
 
+/* --- Tabs --- */
+.tabbar{display:flex;border-bottom:1px solid var(--ink);background:var(--card);padding:0 max(24px,calc((100vw - 1180px)/2));overflow-x:auto}
+.tab-btn{flex:0 0 auto;border:0;background:none;padding:16px 22px;font:600 11px DM Mono,monospace;letter-spacing:.06em;cursor:pointer;color:#6f716a;border-bottom:3px solid transparent;margin-bottom:-1px;white-space:nowrap}
+.tab-btn.active{color:var(--ink);border-bottom-color:var(--green)}
+.tab-btn:hover:not(.active){color:var(--ink)}
+.tab-panel.hidden{display:none}
+.btn-inline{width:auto;display:inline-flex}
+.today-results{max-width:820px;margin:0 auto}
+.manual-fallback{margin:0 0 24px;padding:16px;border:1px dashed #aaa99f;background:#f7f6f1}
+.manual-fallback.hidden{display:none}
+.manual-fallback .hint{margin:0 0 10px}
+.manual-fallback .answer-wrap{margin-bottom:12px}
+#todayRetryBtn.hidden{display:none}
+
+/* --- Spoiler cover (Entrople solves today's Wordle) --- */
+.spoiler-wrap{position:relative}
+.spoiler-content{transition:filter .5s ease}
+.spoiler-wrap:not(.revealed) .spoiler-content{filter:blur(16px) saturate(.4);pointer-events:none;user-select:none}
+.spoiler-cover{position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;background:rgba(23,26,22,.82);padding:24px;opacity:1;visibility:visible;transition:opacity .4s ease,visibility 0s linear 0s}
+.spoiler-wrap.revealed .spoiler-cover{opacity:0;visibility:hidden;transition:opacity .4s ease,visibility 0s linear .4s;pointer-events:none}
+.spoiler-cover-inner{max-width:420px;text-align:center;color:#f1f0e8}
+.spoiler-kicker{font:700 10px DM Mono,monospace;letter-spacing:.16em;color:var(--orange);margin:0 0 10px}
+.spoiler-cover-inner h3{font-size:25px;margin:0 0 10px;letter-spacing:-.02em;font-weight:800}
+.spoiler-cover-inner p{font-size:12px;line-height:1.6;color:#d3d4cc;margin:0 0 20px}
+.spoiler-cover .analyze-btn:disabled{background:#55584d;cursor:progress}
+.spoiler-cover .analyze-btn:disabled:hover{background:#55584d}
+
 @media(max-width:900px){.intro{grid-template-columns:1fr;gap:26px}.workspace{grid-template-columns:1fr}.entry-panel{position:static}.intro h1{font-size:59px}}
-@media(max-width:580px){.topbar{height:60px}.method{display:none}main{padding:48px 15px}.intro{margin-bottom:35px}.intro h1{font-size:45px}.entry-panel,.results{padding:19px}.metric-grid{grid-template-columns:1fr 1fr}.metric:nth-child(2){border-right:0}.metric:nth-child(-n+2){border-bottom:1px solid var(--line)}.tile{width:46px;height:46px}.equation{grid-template-columns:1fr;gap:8px}.route-line{grid-template-columns:24px 65px 1fr}.route-line .score{display:none}.deep-stats{grid-template-columns:1fr}footer{flex-direction:column;gap:8px}.solve-board .tile{width:36px;height:36px;font-size:14px}.solve-step-line{grid-template-columns:24px 65px 1fr}.solve-step-line .score{display:none}}
+@media(max-width:580px){.topbar{height:60px}.method{display:none}main{padding:48px 15px}.intro{margin-bottom:35px}.intro h1{font-size:45px}.entry-panel,.results{padding:19px}.metric-grid{grid-template-columns:1fr 1fr}.metric:nth-child(2){border-right:0}.metric:nth-child(-n+2){border-bottom:1px solid var(--line)}.tile{width:46px;height:46px}.equation{grid-template-columns:1fr;gap:8px}.route-line{grid-template-columns:24px 65px 1fr}.route-line .score{display:none}.deep-stats{grid-template-columns:1fr}footer{flex-direction:column;gap:8px}.solve-board .tile{width:36px;height:36px;font-size:14px}.solve-step-line{grid-template-columns:24px 65px 1fr}.solve-step-line .score{display:none}.tabbar{padding:0 15px}.tab-btn{padding:14px 14px;font-size:10px}}

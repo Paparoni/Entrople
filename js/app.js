@@ -14,6 +14,49 @@ const WIKTIONARY_API = (word) =>
     word.toLowerCase()
   )}`;
 
+// NYT's own Wordle rolls over at midnight Eastern Time, not local time, so the
+// date used to look up "today's" puzzle must be computed in America/New_York.
+const WORDLE_API = (dateStr) => `https://www.nytimes.com/svc/wordle/v2/${dateStr}.json`;
+// If the browser can't reach the NYT endpoint directly (some browsers/networks
+// don't get an Access-Control-Allow-Origin header back from it), fall back to a
+// couple of public CORS relays before giving up.
+const CORS_PROXIES = [
+  (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+  (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+];
+
+// "en-CA" formats as YYYY-MM-DD, which is exactly what the NYT endpoint expects.
+function todaysEasternDate() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+async function fetchTodaysWordle(dateStr) {
+  const url = WORDLE_API(dateStr);
+  const attempts = [url, ...CORS_PROXIES.map((make) => make(url))];
+  let lastErr;
+
+  for (const attemptUrl of attempts) {
+    try {
+      const res = await fetch(attemptUrl, { cache: "no-store" });
+      if (!res.ok) throw new Error(`NYT Wordle API responded ${res.status}`);
+      const data = await res.json();
+      if (!data || typeof data.solution !== "string") {
+        throw new Error("Unexpected response shape from NYT Wordle API");
+      }
+      return data;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+
+  throw lastErr || new Error("Could not reach the NYT Wordle API");
+}
+
 function renderFormula(id, tex, displayMode = false) {
   const el = document.querySelector(`#${id}`);
   if (!el) return;
@@ -994,6 +1037,9 @@ async function renderDefinition(answer) {
 // just tied with an equally-splitting guess that can't be the answer.
 function simulateOptimalSolve(answer) {
   let candidates = words.answers.slice();
+  // Guards against an answer that isn't tagged as a confirmed historical answer
+  // in the live word list (still lets the solve converge instead of stalling).
+  if (!candidates.includes(answer)) candidates.push(answer);
   const steps = [];
   let hardHistory = [];
 
@@ -1028,20 +1074,95 @@ function simulateOptimalSolve(answer) {
   return steps;
 }
 
+// Same search as simulateOptimalSolve, but keeps each step's full entropy-math
+// profile (bucket stats, KL divergence, win-bonus breakdown) and the live
+// candidate pool at that point, so the caller can render a full math breakdown
+// alongside the board rather than just the summary line.
+function simulateOptimalSolveDeep(answer, candidatePool) {
+  let candidates = (candidatePool || words.answers).slice();
+  if (!candidates.includes(answer)) candidates.push(answer);
+
+  const steps = [];
+  let hardHistory = [];
+
+  for (let guessNum = 1; guessNum <= 6; guessNum++) {
+    const candidatesBefore = candidates;
+    const before = candidates.length;
+    let guess, profile;
+
+    if (candidates.length === 1) {
+      guess = candidates[0];
+      profile = guessPartitionProfile(guess, candidates);
+    } else {
+      const best = findBestGuesses(
+        candidates,
+        1,
+        solveMode === "hard" ? hardHistory : null,
+        words.guesses
+      );
+      guess = best.top[0].word;
+      profile = guessPartitionProfile(guess, candidates);
+    }
+
+    const code = feedbackCode(guess, answer);
+    const marks = feedback(guess, answer);
+    hardHistory = [...hardHistory, { guess, code }];
+    candidates = narrowCandidates(candidates, guess, code);
+
+    const solved = guess === answer;
+    const after = Math.max(candidates.length, 1);
+    const actualBits = Math.log2(before) - Math.log2(after);
+
+    steps.push({
+      guess,
+      marks,
+      before,
+      after: candidates.length,
+      candidatesBefore,
+      profile,
+      actualBits,
+      bits: profile.bits,
+      solved,
+    });
+
+    if (solved) break;
+  }
+
+  return steps;
+}
+
+// Selectors for the two places the solve-board animation can render: the
+// analyzer tab's "How Entrople Would Solve" card, and the "today" tab's own
+// live solve. Passed through buildSolveBoard / triggerSolveAnimation / armSolveReveal
+// so both tabs share one implementation instead of duplicating the animation logic.
+const SOLVE_IDS = {
+  analyzer: { card: "#solveCard", board: "#solveBoard", steps: "#solveSteps" },
+  today: { card: "#todaySolveCard", board: "#todaySolveBoard", steps: "#todaySolveSteps" },
+};
+
+// Tracks the in-flight IntersectionObserver (if any) per solve card, keyed by
+// card selector, so re-rendering or replaying a solve cleans up the right one.
+const solveObservers = {};
+
+function disconnectSolveObserver(cardSelector) {
+  const entry = solveObservers[cardSelector];
+  if (!entry) return;
+  entry.observer.disconnect();
+  clearTimeout(entry.fallbackTimer);
+  delete solveObservers[cardSelector];
+}
+
 let cachedSolve = null; // { answer, steps }, avoids re-running the search on replay
-let solveObserver = null; // fires the reveal the first time #solveCard scrolls into view
 
 function renderEntropleSolve(answer, context) {
-  const card = document.querySelector("#solveCard");
-  const boardEl = document.querySelector("#solveBoard");
-  const stepsEl = document.querySelector("#solveSteps");
+  const ids = SOLVE_IDS.analyzer;
+  const card = document.querySelector(ids.card);
+  const boardEl = document.querySelector(ids.board);
+  const stepsEl = document.querySelector(ids.steps);
   const summaryEl = document.querySelector("#solveSummary");
   const replayBtn = document.querySelector("#solveReplay");
 
-  if (solveObserver) {
-    solveObserver.disconnect();
-    solveObserver = null;
-  }
+  disconnectSolveObserver(ids.card);
 
   if (words.status !== "ready") {
     card.classList.add("disabled");
@@ -1066,7 +1187,7 @@ function renderEntropleSolve(answer, context) {
     const steps = simulateOptimalSolve(answer);
     cachedSolve = { answer, steps };
 
-    buildSolveBoard(steps);
+    buildSolveBoard(steps, ids);
 
     const solvedAt = steps.length;
     let compareLine = "";
@@ -1095,19 +1216,23 @@ function renderEntropleSolve(answer, context) {
       }</b> against the live ${words.answers.length.toLocaleString()}-word pool.${compareLine}`;
 
     replayBtn.classList.remove("hidden");
-    armSolveReveal();
+    armSolveReveal(ids);
   }, 20);
 }
 
-// Waits until #solveCard first scrolls into view before playing the reveal animation.
-// Falls back to a timer so the tiles never get stuck invisible if the observer
-// never fires (e.g. the card is taller than the viewport, or already mid-layout).
-function armSolveReveal() {
-  const card = document.querySelector("#solveCard");
+// Waits until a solve card first scrolls into view before playing the reveal
+// animation. Falls back to a timer so the tiles never get stuck invisible if
+// the observer never fires (e.g. the card is taller than the viewport, or
+// already mid-layout). `ids` selects which card/board/steps to arm (see
+// SOLVE_IDS above).
+function armSolveReveal(ids) {
+  const card = document.querySelector(ids.card);
   if (!card) return;
 
+  disconnectSolveObserver(ids.card);
+
   if (!("IntersectionObserver" in window)) {
-    triggerSolveAnimation();
+    triggerSolveAnimation(ids);
     return;
   }
 
@@ -1115,15 +1240,11 @@ function armSolveReveal() {
   const fire = () => {
     if (fired) return;
     fired = true;
-    triggerSolveAnimation();
-    if (solveObserver) {
-      solveObserver.disconnect();
-      solveObserver = null;
-    }
-    clearTimeout(fallbackTimer);
+    triggerSolveAnimation(ids);
+    disconnectSolveObserver(ids.card);
   };
 
-  solveObserver = new IntersectionObserver(
+  const observer = new IntersectionObserver(
     (entries) => {
       entries.forEach((entry) => {
         if (entry.isIntersecting || entry.intersectionRatio > 0) fire();
@@ -1132,16 +1253,17 @@ function armSolveReveal() {
     { threshold: 0 }
   );
 
-  solveObserver.observe(card);
+  observer.observe(card);
 
   // Defensive fallback: guarantees the reveal plays even if the observer
   // never reports an intersection (zero-height element at observe time, etc).
   const fallbackTimer = setTimeout(fire, 600);
+  solveObservers[ids.card] = { observer, fallbackTimer };
 }
 
-function buildSolveBoard(steps) {
-  const boardEl = document.querySelector("#solveBoard");
-  const stepsEl = document.querySelector("#solveSteps");
+function buildSolveBoard(steps, ids) {
+  const boardEl = document.querySelector(ids.board);
+  const stepsEl = document.querySelector(ids.steps);
 
   boardEl.innerHTML = "";
   stepsEl.innerHTML = "";
@@ -1178,9 +1300,9 @@ function buildSolveBoard(steps) {
   });
 }
 
-function triggerSolveAnimation() {
-  const boardEl = document.querySelector("#solveBoard");
-  const stepsEl = document.querySelector("#solveSteps");
+function triggerSolveAnimation(ids) {
+  const boardEl = document.querySelector(ids.board);
+  const stepsEl = document.querySelector(ids.steps);
   if (!boardEl || !stepsEl) return;
 
   boardEl.classList.remove("animate");
@@ -1218,11 +1340,8 @@ form.addEventListener("submit", (event) => {
 
 document.querySelector("#solveReplay").addEventListener("click", () => {
   if (!cachedSolve) return;
-  if (solveObserver) {
-    solveObserver.disconnect();
-    solveObserver = null;
-  }
-  triggerSolveAnimation();
+  disconnectSolveObserver(SOLVE_IDS.analyzer.card);
+  triggerSolveAnimation(SOLVE_IDS.analyzer);
 });
 
 document.querySelectorAll(".mode-btn").forEach((btn) => {
@@ -1234,6 +1353,302 @@ document.querySelectorAll(".mode-btn").forEach((btn) => {
       .forEach((b) => b.classList.toggle("active", b.dataset.mode === solveMode));
     analyze();
   });
+});
+
+/* ---------------------------------------------------------------------- */
+/* "Entrople Solves Today's Wordle" tab                                    */
+/* ---------------------------------------------------------------------- */
+
+let cachedTodaySolve = null; // { answer, steps, puzzle }, avoids re-solving on reveal/replay
+
+// Renders the guess-by-guess entropy breakdown for the today's-Wordle tab.
+// Mirrors renderDeepMath's per-step stat cards and KaTeX formulas, but works
+// off simulateOptimalSolveDeep's steps directly instead of comparing against
+// a human's guesses (there's nothing to compare against here: Entrople's
+// picks ARE the top-ranked guess by construction at every step).
+function renderTodayDeepMath(steps, startSize) {
+  const deepBody = document.querySelector("#todayDeepBody");
+  deepBody.innerHTML = "";
+
+  let totalBits = 0;
+
+  steps.forEach((step, i) => {
+    totalBits += step.actualBits;
+    const p = step.profile;
+    const row = document.createElement("div");
+    row.className = "deep-row";
+    const formulaId = `todayDeepFormula${i}`;
+
+    row.innerHTML = `
+      <div class="deep-row-head">
+        <b>${String(i + 1).padStart(2, "0")} · ${step.guess}</b>
+        <span>${step.before.toLocaleString()} → ${step.after.toLocaleString()} candidates</span>
+      </div>
+      <div class="deep-stats">
+        <div><p>ACTUAL INFO GAINED</p><strong>${fmtBits(step.actualBits)}</strong></div>
+        <div><p>RAW ENTROPY</p><strong>${fmtBits(p.bits)}</strong></div>
+        <div><p>WIN-BONUS ADJUSTED</p><strong>${fmtBits(p.adjustedBits)}</strong></div>
+      </div>
+      <div class="deep-stats-2">
+        <div><p>PATTERN BUCKETS USED</p><strong>${p.bucketsUsed} / 243</strong></div>
+        <div><p>E[N'] = Σnᵢ²/N</p><strong>${p.expectedRemaining.toFixed(1)}</strong></div>
+        <div><p>σ(bucket size)</p><strong>±${p.stdDev.toFixed(1)}</strong></div>
+      </div>
+      <div class="deep-stats-2">
+        <div><p>D_KL(P‖UNIFORM)</p><strong>${p.klDivergence.toFixed(3)} bits</strong></div>
+        <div><p>LARGEST BUCKET</p><strong>${p.maxBucket.toLocaleString()} (${(
+          (p.maxBucket / step.before) *
+          100
+        ).toFixed(1)}%)</strong></div>
+        <div><p>MEAN BUCKET SIZE</p><strong>${p.mean.toFixed(1)}</strong></div>
+      </div>
+      <div class="histogram" title="Each bar is one realized feedback pattern, sorted largest to smallest">
+        ${p.buckets
+          .slice(0, 60)
+          .map(
+            (n) =>
+              `<span style="height:${Math.max(4, (n / p.maxBucket) * 100)}%" title="${n} candidates"></span>`
+          )
+          .join("")}
+        ${p.buckets.length > 60 ? `<em>+${p.buckets.length - 60} more</em>` : ""}
+      </div>
+      <p class="deep-formula" id="${formulaId}"></p>
+      <p class="deep-formula" id="${formulaId}-win"></p>
+      <p class="deep-formula" id="${formulaId}-kl"></p>
+      <p class="deep-note">
+        ${
+          step.solved
+            ? `Exact match: this word was itself the top-ranked candidate, carrying a ${(p.pWin * 100).toFixed(
+                1
+              )}% chance of being the answer baked directly into its score.`
+            : `Chosen as the single highest win-bonus-adjusted score across the ${step.before.toLocaleString()}-word live candidate pool. The largest single bucket it could have landed in held ${p.maxBucket.toLocaleString()} of those candidates (mean bucket size across the ${
+                p.bucketsUsed
+              } realized patterns was ${p.mean.toFixed(1)}).`
+        }
+      </p>
+    `;
+
+    deepBody.appendChild(row);
+
+    renderFormula(
+      formulaId,
+      `H(\\text{${step.guess}}) = -\\sum_{i=1}^{${p.bucketsUsed}} p_i \\log_2 p_i = ${p.bits.toFixed(
+        3
+      )}\\ \\text{bits}, \\quad p_i = n_i / ${step.before}`
+    );
+
+    renderFormula(
+      `${formulaId}-win`,
+      `H'(\\text{${step.guess}}) = H(\\text{${step.guess}}) + p_{\\text{win}} = ${p.bits.toFixed(
+        3
+      )} + ${p.pWin.toFixed(3)} = ${p.adjustedBits.toFixed(3)}\\ \\text{bits}`
+    );
+
+    renderFormula(
+      `${formulaId}-kl`,
+      `D_{KL}(P\\Vert U) = \\sum_i p_i \\log_2\\!\\dfrac{p_i}{1/243} = ${p.klDivergence.toFixed(
+        3
+      )}\\ \\text{bits}`
+    );
+  });
+
+  const guessesUsed = steps.length;
+  const avgBits = totalBits / guessesUsed;
+  const infoEfficiency = Math.min(100, (avgBits / MAX_BITS_PER_GUESS) * 100);
+  const theoreticalMin = Math.max(1, Math.ceil(Math.log2(startSize) / MAX_BITS_PER_GUESS));
+
+  const summary = document.createElement("div");
+  summary.className = "deep-summary";
+  summary.innerHTML = `
+    <div class="deep-stats">
+      <div><p>TOTAL BITS EARNED</p><strong>${fmtBits(totalBits)}</strong></div>
+      <div><p>AVG BITS / GUESS</p><strong>${fmtBits(avgBits)}</strong></div>
+      <div><p>INFO EFFICIENCY</p><strong>${infoEfficiency.toFixed(0)}%</strong></div>
+    </div>
+    <p class="deep-formula" id="todayDeepFormulaSummary"></p>
+    <p class="deep-note">
+      A single guess can carry at most log₂(243) ≈ ${MAX_BITS_PER_GUESS.toFixed(2)} bits, since
+      Wordle feedback has only 3⁵ = 243 possible patterns. Starting from ${startSize.toLocaleString()}
+      candidates, the information-theoretic floor is ⌈log₂(${startSize.toLocaleString()}) ÷
+      ${MAX_BITS_PER_GUESS.toFixed(2)}⌉ = ${theoreticalMin} guess${theoreticalMin === 1 ? "" : "es"}.
+      Today's run averaged ${infoEfficiency.toFixed(0)}% of that per-guess ceiling.
+    </p>
+  `;
+  deepBody.appendChild(summary);
+
+  renderFormula(
+    "todayDeepFormulaSummary",
+    `n^{*} = \\left\\lceil \\dfrac{\\log_2(${startSize
+      .toLocaleString()
+      .replace(/,/g, "{,}")})}{\\log_2(243)} \\right\\rceil = \\left\\lceil \\dfrac{${Math.log2(
+      startSize
+    ).toFixed(2)}}{${MAX_BITS_PER_GUESS.toFixed(4)}} \\right\\rceil = ${theoreticalMin}`,
+    true
+  );
+}
+
+// Populates the (still spoiler-covered) board, summary, and math cards once
+// today's answer is known and the live dictionary is ready. Nothing here is
+// visible until the person clicks the reveal button — the spoiler cover just
+// blurs the already-built DOM.
+function finishTodaySolve(answer, puzzle) {
+  const steps = simulateOptimalSolveDeep(answer);
+  cachedTodaySolve = { answer, steps, puzzle };
+
+  buildSolveBoard(steps, SOLVE_IDS.today);
+
+  const solvedAt = steps.length;
+  document.querySelector("#todaySolveSummary").innerHTML =
+    `Playing win-bonus-adjusted entropy search (always the single highest adjusted-information ` +
+    `legal guess, honoring ${solveMode === "hard" ? "Hard Mode" : "Normal Mode"}), Entrople solves today's ` +
+    `answer in <b>${solvedAt} ${solvedAt === 1 ? "guess" : "guesses"}</b> against the live ` +
+    `${words.answers.length.toLocaleString()}-word pool.`;
+
+  const poolSize = words.answers.length;
+  const baseBits = Math.log2(poolSize);
+  document.querySelector("#todayBits").textContent = `≈ ${baseBits.toFixed(2)} bits`;
+  document.querySelector("#todayPoolSizeLabel").textContent = poolSize.toLocaleString();
+  document.querySelector("#todayMathCopy").textContent =
+    `Starting from a live ${poolSize.toLocaleString()}-word answer pool, identifying one exact answer ` +
+    `requires log₂(${poolSize.toLocaleString()}) = ${baseBits.toFixed(2)} bits. Entrople reached it in ` +
+    `${solvedAt} of 6 guesses.`;
+
+  renderTodayDeepMath(steps, poolSize);
+
+  const revealBtn = document.querySelector("#todayRevealBtn");
+  revealBtn.disabled = false;
+  revealBtn.textContent = "REVEAL TODAY'S SOLVE →";
+}
+
+function setTodayFetchStatus(text, tone) {
+  const el = document.querySelector("#todayFetchStatus");
+  el.textContent = text;
+  el.className = tone ? `method data-status ${tone}` : "method";
+}
+
+function showTodayError(message) {
+  document.querySelector("#todayError").textContent = message;
+  document.querySelector("#todayRetryBtn").classList.remove("hidden");
+  document.querySelector("#todayManualFallback").classList.remove("hidden");
+  document.querySelector("#todayRevealBtn").textContent = "UNAVAILABLE";
+}
+
+async function initTodaySolve() {
+  const dateStr = todaysEasternDate();
+  const dateLabel = document.querySelector("#todayDateLabel");
+  const revealBtn = document.querySelector("#todayRevealBtn");
+
+  document.querySelector("#todayError").textContent = "";
+  document.querySelector("#todayRetryBtn").classList.add("hidden");
+  document.querySelector("#todayManualFallback").classList.add("hidden");
+  document.querySelector("#todaySpoiler").classList.remove("revealed");
+  document.querySelector("#todaySolveReplay").classList.add("hidden");
+  revealBtn.disabled = true;
+  revealBtn.textContent = "SOLVING…";
+
+  const prettyDate = new Date(`${dateStr}T12:00:00`).toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+  dateLabel.textContent = `Today's puzzle · ${prettyDate} (Eastern Time)`;
+
+  let puzzle;
+  try {
+    setTodayFetchStatus("Fetching today's puzzle from the NYT Wordle API…");
+    puzzle = await fetchTodaysWordle(dateStr);
+  } catch (err) {
+    console.error("Entrople: couldn't fetch today's Wordle", err);
+    setTodayFetchStatus("Could not reach the NYT Wordle API.", "error");
+    showTodayError(
+      "Entrople couldn't fetch today's answer just now — the NYT endpoint doesn't always allow " +
+        "direct cross-origin requests from a browser, and a public CORS relay was tried as a " +
+        "fallback and also failed. You can retry, or enter today's answer yourself below."
+    );
+    return;
+  }
+
+  // Wait for the live word dictionary if it's still loading.
+  while (words.status === "loading") {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+
+  if (words.status !== "ready") {
+    setTodayFetchStatus("Live word dictionary unavailable.", "error");
+    showTodayError(
+      "Entrople's own solve needs the live word dictionary, which failed to load. Reload with a " +
+        "network connection to try again."
+    );
+    return;
+  }
+
+  setTodayFetchStatus(
+    `Puzzle #${puzzle.id ?? "?"} fetched · solved live`,
+    "ready"
+  );
+
+  finishTodaySolve(puzzle.solution.toUpperCase(), puzzle);
+}
+
+let todayTabInitialized = false;
+
+document.querySelectorAll(".tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (btn.classList.contains("active")) return;
+
+    document.querySelectorAll(".tab-btn").forEach((b) => {
+      const isActive = b === btn;
+      b.classList.toggle("active", isActive);
+      b.setAttribute("aria-selected", isActive ? "true" : "false");
+    });
+
+    const target = btn.dataset.tab;
+    document.querySelectorAll(".tab-panel").forEach((panel) => {
+      panel.classList.toggle("hidden", panel.id !== `panel-${target}`);
+    });
+
+    if (target === "today" && !todayTabInitialized) {
+      todayTabInitialized = true;
+      initTodaySolve();
+    }
+  });
+});
+
+document.querySelector("#todayRetryBtn").addEventListener("click", () => {
+  initTodaySolve();
+});
+
+document.querySelector("#todayManualSolve").addEventListener("click", () => {
+  const input = document.querySelector("#todayManualAnswer");
+  const answer = clean(input.value);
+  const errorEl = document.querySelector("#todayError");
+
+  if (answer.length !== 5) {
+    errorEl.textContent = "Enter a 5-letter word to solve for.";
+    return;
+  }
+  if (words.status !== "ready") {
+    errorEl.textContent = "Entrople's own solve needs the live word dictionary, which isn't ready yet.";
+    return;
+  }
+
+  errorEl.textContent = "";
+  setTodayFetchStatus(`Solving ${answer} manually…`, "ready");
+  document.querySelector("#todayDateLabel").textContent = `Manual entry · ${answer}`;
+  finishTodaySolve(answer, null);
+});
+
+document.querySelector("#todayRevealBtn").addEventListener("click", () => {
+  if (!cachedTodaySolve) return;
+  document.querySelector("#todaySpoiler").classList.add("revealed");
+  document.querySelector("#todaySolveReplay").classList.remove("hidden");
+  triggerSolveAnimation(SOLVE_IDS.today);
+});
+
+document.querySelector("#todaySolveReplay").addEventListener("click", () => {
+  if (!cachedTodaySolve) return;
+  triggerSolveAnimation(SOLVE_IDS.today);
 });
 
 renderInputs();
