@@ -534,7 +534,7 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
                       }${candVowels.length === newCandVowels.length ? ", all still open" : ""}`;
                 const winNote =
                   cand.pWin > 0
-                    ? ` It's itself a live candidate, so it also carries a ${(cand.pWin * 100).toFixed(1)}% chance of winning outright this turn — worth +${cand.pWin.toFixed(3)} bits on top of its raw entropy of ${fmtBits(cand.bits)}.`
+                    ? ` It's itself a live candidate, so it also carries a ${(cand.pWin * 100).toFixed(1)}% chance of winning outright this turn, worth +${cand.pWin.toFixed(3)} bits on top of its raw entropy of ${fmtBits(cand.bits)}.`
                     : "";
                 let why;
                 if (ci === 0) {
@@ -558,7 +558,7 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
               })
               .join("")}
           </div>
-          <p class="next-best-mode-note">The ranking is Shannon entropy plus a win-bonus correction (Healy, 2022): a guess that could itself be the answer gets +p<sub>win</sub> bits added on top of its raw entropy, since winning outright beats merely narrowing the field to the same size without winning. This is what breaks the old tie between two guesses carrying identical bits — the one that's a live candidate now outranks the one that isn't. It still doesn't weight a word by anything beyond that specific correction, so among words that are equally live candidates (or equally not), the ranking is unchanged. The commonness badge and vowel note per word above are tidbits, not separate scoring terms: the badge reflects how often the word is used in everyday English globally (Google Books Ngram data), not Wordle-answer likelihood. Vowel coverage is already fully priced into the entropy number itself (see the citations in the formula reference above), so an explicit vowel bonus on top would just double-count it.</p>
+          <p class="next-best-mode-note">The ranking is Shannon entropy plus a win-bonus correction (Healy, 2022): a guess that could itself be the answer gets +p<sub>win</sub> bits added on top of its raw entropy, since winning outright beats merely narrowing the field to the same size without winning. This is what breaks the old tie between two guesses carrying identical bits: the one that's a live candidate now outranks the one that isn't. It still doesn't weight a word by anything beyond that specific correction, so among words that are equally live candidates (or equally not), the ranking is unchanged. The commonness badge and vowel note per word above are tidbits, not separate scoring terms: the badge reflects how often the word is used in everyday English globally (Google Books Ngram data), not Wordle-answer likelihood. Vowel coverage is already fully priced into the entropy number itself (see the citations in the formula reference above), so an explicit vowel bonus on top would just double-count it.</p>
         </div>
       `;
 
@@ -987,12 +987,11 @@ async function renderDefinition(answer) {
   }
 }
 
-<<<<<<< HEAD
-// Win-bonus-adjusted entropy solve, unconstrained by Hard Mode, independent of the user's guesses.
-=======
-// Pure Shannon-entropy solve, independent of the user's guesses. Honors Hard Mode when active,
-// so suggested guesses stay legal (must reuse all previously revealed green/yellow letters).
->>>>>>> 146864196cf12c524a5d80fc4cb34f3c86981453
+// Win-bonus-adjusted entropy solve, independent of the user's guesses. Honors Hard Mode
+// when active, so suggested guesses stay legal (must reuse all previously revealed
+// green/yellow letters); ranking within that legal set uses adjustedBits (see
+// entropy-math.js: guessEntropy) so a guess that could itself win outright is never
+// just tied with an equally-splitting guess that can't be the answer.
 function simulateOptimalSolve(answer) {
   let candidates = words.answers.slice();
   const steps = [];
@@ -1059,7 +1058,7 @@ function renderEntropleSolve(answer, context) {
   boardEl.innerHTML = "";
   boardEl.classList.remove("animate");
   stepsEl.classList.remove("animate");
-  stepsEl.innerHTML = `<p class="solve-empty">Solving with pure entropy search…</p>`;
+  stepsEl.innerHTML = `<p class="solve-empty">Solving with win-bonus-adjusted entropy search…</p>`;
   summaryEl.textContent = "";
   replayBtn.classList.add("hidden");
 
@@ -1081,17 +1080,17 @@ function renderEntropleSolve(answer, context) {
       } else {
         const beat = -diff;
         compareLine =
-          ` Your solve actually beat pure-entropy search by ${beat} ${beat === 1 ? "guess" : "guesses"}, a` +
+          ` Your solve actually beat the win-bonus-adjusted search by ${beat} ${beat === 1 ? "guess" : "guesses"}, a` +
           ` well-timed non-greedy pick can still win faster than always taking the highest` +
-          ` expected information.`;
+          ` adjusted-entropy legal guess.`;
       }
     } else if (context && !context.solvedAt) {
       compareLine = ` Your board didn't reach the answer within the guesses evaluated.`;
     }
 
     summaryEl.innerHTML =
-      `Playing pure Shannon-entropy search (always the single highest expected-information ` +
-      `legal guess), Entrople solves <b>${answer}</b> in <b>${solvedAt} ${
+      `Playing win-bonus-adjusted entropy search (always the single highest adjusted-information ` +
+      `legal guess, honoring ${solveMode === "hard" ? "Hard Mode" : "Normal Mode"}), Entrople solves <b>${answer}</b> in <b>${solvedAt} ${
         solvedAt === 1 ? "guess" : "guesses"
       }</b> against the live ${words.answers.length.toLocaleString()}-word pool.${compareLine}`;
 

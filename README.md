@@ -47,6 +47,12 @@ A guess that splits the candidate pool into many small, evenly-sized buckets car
 
 At each step of a solve, Entrople finds the top-entropy guesses either from the narrowed candidate pool, or, once the pool is small enough, from the full guess dictionary, since a non-candidate word can sometimes split a small pool more evenly than any remaining candidate. Guesses are then re-ranked against this profile to show how the actual guess made in the game compares to the guess Entrople itself would have picked.
 
+**Win-bonus correction.** Raw Shannon entropy alone has a blind spot: it scores a guess purely by how evenly it splits the candidate pool, so a guess that can never be the answer can tie exactly with a guess that could win outright this turn, as long as both split the pool the same way. Following Alex Healy's analysis (see Math citations below), Entrople corrects for this by adding a small bonus to a guess's entropy equal to the probability that the guess itself is the hidden answer:
+
+    adjustedBits = bits + p_win,   p_win = Pr(guess is the answer)
+
+p_win is nonzero only when the guess is itself still a live candidate (it's the fraction of the pool, 1/N, that the guess's own all-green GGGGG bucket represents). This falls directly out of Healy's derivation: he shows that assigning the all-green outcome a value of -1 bit, instead of the 0 a same-sized bucket would otherwise contribute, is algebraically equivalent to adding p_win to the guess's ordinary entropy. Entrople's best-guess search, its top-5 rankings, and its own auto-solve all rank guesses by this adjusted score rather than raw entropy, so a guess that could win immediately is never just tied with one that only narrows the field.
+
 # Math citations
 [Claude Shannon](https://en.wikipedia.org/wiki/Claude_Shannon) - author of ["A Mathematical Theory of Communication"](https://people.math.harvard.edu/~ctm/home/text/others/shannon/entropy/entropy.pdf), the source of the entropy formula used throughout
 
@@ -55,6 +61,8 @@ At each step of a solve, Entrople finds the top-entropy guesses either from the 
 [Kullback-Leibler divergence](https://en.wikipedia.org/wiki/Kullback%E2%80%93Leibler_divergence) - used to measure how far a guess's pattern distribution is from uniform
 
 [Alex Selby](https://github.com/alex1770) - [Score calculator](https://github.com/alex1770/wordle) author, whose bucket-based scoring approach informed the feedback-bucketing math here
+
+[Alexander D. Healy](http://www.alexhealy.net/) - ["On Optimal Strategies for Wordle"](http://www.alexhealy.net/papers/wordle.pdf), source of the win-bonus correction (rewarding a guess that could itself be the answer) used in Entrople's best-guess ranking
 
 # Credits
 [ybenhayun](https://github.com/ybenhayun) - [Original bot](https://ybenhayun.github.io/wordlebot/) author
