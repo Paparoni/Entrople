@@ -671,13 +671,29 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
       true
     );
 
-    renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency);
+    renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency, theoreticalMin);
     renderTraps(steps, solvedAt);
   }, 20);
 }
 
-// Composite 0-100 score: info efficiency (20%), solve efficiency (50%), luck (20%), evenness (10%).
-function renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency) {
+// Composite 0-100 score: guess quality (45%), solve speed (35%), per-step luck (20%).
+//
+// Why not grade against the raw 7.92-bit (log2 243) ceiling or dock a flat
+// 12 points per guess used? Both treat an unreachable ideal as the baseline.
+// No real guess ever splits 243 ways evenly against a live answer list, so
+// scoring "avg bits / 7.92" or penalizing every guess past guess 1 the same
+// amount fails good play: it grades you against a solver that doesn't exist
+// rather than against the best move actually available at each step.
+// Instead:
+//   - Guess quality asks "how good was the word you picked, relative to the
+//     best word Entrople could find for that exact step" (win-bonus-adjusted
+//     entropy ratio). That's the real skill signal.
+//   - Solve speed compares your guess count to a realistic target
+//     (the information-theoretic minimum, plus one extra guess of slack --
+//     since no real opening word partitions perfectly), not to "1 guess."
+//   - Luck factor (already computed elsewhere) captures how the dice fell
+//     independent of whether the guess itself was sound.
+function renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency, theoreticalMin) {
   const card = document.querySelector("#gradeCard");
   card.classList.remove("disabled");
 
@@ -686,18 +702,29 @@ function renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency) {
   );
   const luckScore = luckValues.reduce((a, b) => a + b, 0) / luckValues.length;
 
-  const klValues = steps.map((s) => s.profile.klDivergence);
-  const avgKL = klValues.reduce((a, b) => a + b, 0) / klValues.length;
-  const evennessScore = Math.max(0, 100 - avgKL * 12);
+  // How good was each guess, relative to the best word available for that
+  // exact step (both scored win-bonus-adjusted, so a guess that could win
+  // outright is compared fairly against other guesses that could too).
+  const qualityValues = steps.map((s) => {
+    const bestBits = s.best?.top?.[0]?.adjustedBits ?? s.profile.adjustedBits;
+    if (bestBits <= 0) return 100; // only one legal word left to try
+    return Math.min(100, (s.profile.adjustedBits / bestBits) * 100);
+  });
+  const guessQualityScore = qualityValues.reduce((a, b) => a + b, 0) / qualityValues.length;
 
-  const solveEfficiencyScore = solvedAt ? Math.max(0, 100 - (solvedAt - 1) * 12) : 0;
+  // A realistic target: the information-theoretic floor, plus one guess of
+  // slack, since perfectly even 243-way splits don't occur against a real
+  // answer list. Full marks at or under that target; -15 per guess beyond it.
+  const speedTarget = Math.max(1, theoreticalMin + 1);
+  const speedEfficiencyScore = solvedAt
+    ? Math.max(0, 100 - Math.max(0, solvedAt - speedTarget) * 15)
+    : 0;
 
-  const WEIGHTS = { info: 0.2, solve: 0.5, luck: 0.2, even: 0.1 };
+  const WEIGHTS = { quality: 0.45, speed: 0.35, luck: 0.2 };
   const rawScore =
-    WEIGHTS.info * infoEfficiency +
-    WEIGHTS.solve * solveEfficiencyScore +
-    WEIGHTS.luck * luckScore +
-    WEIGHTS.even * evennessScore;
+    WEIGHTS.quality * guessQualityScore +
+    WEIGHTS.speed * speedEfficiencyScore +
+    WEIGHTS.luck * luckScore;
   const score = Math.max(0, Math.min(100, rawScore));
 
   // +/- is a within-band modifier: top third of the band earns a +,
@@ -726,16 +753,16 @@ function renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency) {
   if (!solvedAt) letter = score >= 50 ? (score >= 57.5 ? "D+" : score >= 42.5 ? "D" : "D-") : "F";
 
   const verdicts = {
-    S: "Near-optimal. Your average bits-per-guess tracked the theoretical ceiling closely, every guess split its candidate pool close to evenly, and you solved with guesses to spare.",
-    A: "Excellent extraction of information. Small losses somewhere in efficiency, evenness, or guesses used kept this just short of optimal.",
-    B: "A solid, above-average solve. The entropy math shows real information gained each guess, with room to trim either the guess count or the partition evenness.",
-    C: "A workable solve, but a meaningful gap opened between what your guesses were expected to yield and what they actually returned, or you used more guesses than the info gained justified.",
+    S: "Near-optimal. Your guesses tracked the best word available at nearly every step, you solved at or ahead of a realistic guess-count target, and the outcomes largely matched what the entropy math expected.",
+    A: "Excellent play. Your guesses were consistently close to the best word Entrople could find for each step, and you solved efficiently relative to the information-theoretic floor.",
+    B: "A solid, above-average solve. Most guesses were close to optimal for their step, with some room to trim either guess quality or guess count.",
+    C: "A workable solve, but a meaningful gap opened between the guesses you played and the best available guess at one or more steps, or you used more guesses than the candidate pool justified.",
     D: solvedAt
-      ? "You solved it, but inefficiently. Low information efficiency, uneven partitions, or both, relative to what the candidate pool allowed."
+      ? "You solved it, but the guesses played were well off the best available guess for their step, the guess count ran well past a realistic target, or both."
       : "The puzzle wasn't solved within the guesses evaluated, which caps the grade regardless of how any individual guess scored.",
     F: solvedAt
-      ? "Solved, but the underlying information metrics were weak across the board."
-      : "Not solved, and the information metrics on the guesses played were weak as well.",
+      ? "Solved, but guess quality and pacing were weak across the board relative to what the candidate pool allowed."
+      : "Not solved, and the guesses played were well off the best available guess as well.",
   };
 
   document.querySelector("#gradeLetter").className = `grade-letter grade-${letter[0].toLowerCase()}`;
@@ -745,16 +772,18 @@ function renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency) {
 
   const rows = [
     {
-      label: "INFO EFFICIENCY",
-      detail: `avg ${fmtBits(avgBits)} / ${fmtBits(MAX_BITS_PER_GUESS)} ceiling`,
-      value: infoEfficiency,
-      weight: WEIGHTS.info,
+      label: "GUESS QUALITY",
+      detail: `avg ${guessQualityScore.toFixed(0)}% of best available guess's bits, per step`,
+      value: guessQualityScore,
+      weight: WEIGHTS.quality,
     },
     {
-      label: "SOLVE EFFICIENCY",
-      detail: solvedAt ? `solved on guess ${solvedAt} of 6` : "not solved",
-      value: solveEfficiencyScore,
-      weight: WEIGHTS.solve,
+      label: "SOLVE SPEED",
+      detail: solvedAt
+        ? `solved on guess ${solvedAt} of 6 (target ≤${speedTarget} given a ${theoreticalMin}-guess floor)`
+        : "not solved",
+      value: speedEfficiencyScore,
+      weight: WEIGHTS.speed,
     },
     {
       label: "PER-STEP LUCK FACTOR",
@@ -763,12 +792,6 @@ function renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency) {
       }`,
       value: luckScore,
       weight: WEIGHTS.luck,
-    },
-    {
-      label: "PARTITION EVENNESS",
-      detail: `mean D_KL(P‖U) = ${avgKL.toFixed(3)} bits`,
-      value: evennessScore,
-      weight: WEIGHTS.even,
     },
   ];
 
@@ -787,11 +810,9 @@ function renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency) {
 
   renderFormula(
     "gradeFormula",
-    `\\text{Score} = 0.30(${infoEfficiency.toFixed(0)}) + 0.40(${solveEfficiencyScore.toFixed(
+    `\\text{Score} = 0.45(${guessQualityScore.toFixed(0)}) + 0.35(${speedEfficiencyScore.toFixed(
       0
-    )}) + 0.20(${luckScore.toFixed(0)}) + 0.10(${evennessScore.toFixed(
-      0
-    )}) = ${score.toFixed(1)} \\Rightarrow \\text{${letter}}`,
+    )}) + 0.20(${luckScore.toFixed(0)}) = ${score.toFixed(1)} \\Rightarrow \\text{${letter}}`,
     true
   );
 }
