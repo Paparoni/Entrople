@@ -58,9 +58,9 @@
 /* --- How Entrople Would Solve --- */
 .solve-card.disabled{opacity:.6}
 .solve-board{display:flex;flex-direction:column;align-items:center;gap:6px;margin:18px 0 4px;min-height:0}
-.solve-board .tile{width:42px;height:42px;font-size:16px;opacity:0;transform:scale(.4) rotateX(90deg);perspective:200px}
+.solve-board .tile{width:42px;height:42px;font-size:16px;opacity:0;transform:scale(.4);backface-visibility:hidden}
 .solve-board.animate .tile{animation:solveTileIn .45s cubic-bezier(.22,.9,.32,1.2) forwards;animation-delay:var(--tile-delay,0ms)}
-@keyframes solveTileIn{0%{opacity:0;transform:scale(.4) rotateX(90deg)}60%{opacity:1;transform:scale(1.08) rotateX(0)}100%{opacity:1;transform:scale(1) rotateX(0)}}
+@keyframes solveTileIn{0%{opacity:0;transform:scale(.4)}60%{opacity:1;transform:scale(1.08)}100%{opacity:1;transform:scale(1)}}
 .solve-steps{margin-top:10px}
 .solve-step-line{display:grid;grid-template-columns:29px 82px 1fr auto;gap:10px;align-items:center;padding:11px 0;border-bottom:1px solid #deddd5;opacity:0;transform:translateY(6px)}
 .solve-step-line:last-child{border:0}

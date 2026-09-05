@@ -1,5 +1,7 @@
 # Entrople
 An entropy-driven Wordle solve analyzer, based on the rules of [Wordle](https://www.nytimes.com/games/wordle/index.html) by Josh Wardle. Enter an answer and a set of guesses, and Entrople scores the solve against a live word pool, narrows the real candidate space guess by guess, and shows the information-theory math behind the route, including the mathematically optimal route it would have taken itself.
+### Author: Antwaun Tune (tuneantwaun@gmail.com)
+Try it out here: https://paparoni.github.io/Entrople/
 
 You can either:
 

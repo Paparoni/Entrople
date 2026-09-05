@@ -987,10 +987,16 @@ async function renderDefinition(answer) {
   }
 }
 
+<<<<<<< HEAD
 // Win-bonus-adjusted entropy solve, unconstrained by Hard Mode, independent of the user's guesses.
+=======
+// Pure Shannon-entropy solve, independent of the user's guesses. Honors Hard Mode when active,
+// so suggested guesses stay legal (must reuse all previously revealed green/yellow letters).
+>>>>>>> 146864196cf12c524a5d80fc4cb34f3c86981453
 function simulateOptimalSolve(answer) {
   let candidates = words.answers.slice();
   const steps = [];
+  let hardHistory = [];
 
   for (let guessNum = 1; guessNum <= 6; guessNum++) {
     const before = candidates.length;
@@ -999,7 +1005,12 @@ function simulateOptimalSolve(answer) {
     if (candidates.length === 1) {
       guess = candidates[0];
     } else {
-      const best = findBestGuesses(candidates, 1, null, words.guesses);
+      const best = findBestGuesses(
+        candidates,
+        1,
+        solveMode === "hard" ? hardHistory : null,
+        words.guesses
+      );
       guess = best.top[0].word;
       bits = best.top[0].bits;
       searched = best.searched;
@@ -1007,6 +1018,7 @@ function simulateOptimalSolve(answer) {
 
     const code = feedbackCode(guess, answer);
     const marks = feedback(guess, answer);
+    hardHistory = [...hardHistory, { guess, code }];
     candidates = narrowCandidates(candidates, guess, code);
 
     const solved = guess === answer;
@@ -1089,6 +1101,8 @@ function renderEntropleSolve(answer, context) {
 }
 
 // Waits until #solveCard first scrolls into view before playing the reveal animation.
+// Falls back to a timer so the tiles never get stuck invisible if the observer
+// never fires (e.g. the card is taller than the viewport, or already mid-layout).
 function armSolveReveal() {
   const card = document.querySelector("#solveCard");
   if (!card) return;
@@ -1098,20 +1112,32 @@ function armSolveReveal() {
     return;
   }
 
+  let fired = false;
+  const fire = () => {
+    if (fired) return;
+    fired = true;
+    triggerSolveAnimation();
+    if (solveObserver) {
+      solveObserver.disconnect();
+      solveObserver = null;
+    }
+    clearTimeout(fallbackTimer);
+  };
+
   solveObserver = new IntersectionObserver(
     (entries) => {
       entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          triggerSolveAnimation();
-          solveObserver.disconnect();
-          solveObserver = null;
-        }
+        if (entry.isIntersecting || entry.intersectionRatio > 0) fire();
       });
     },
-    { threshold: 0.3 }
+    { threshold: 0 }
   );
 
   solveObserver.observe(card);
+
+  // Defensive fallback: guarantees the reveal plays even if the observer
+  // never reports an intersection (zero-height element at observe time, etc).
+  const fallbackTimer = setTimeout(fire, 600);
 }
 
 function buildSolveBoard(steps) {
