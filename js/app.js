@@ -20,11 +20,19 @@ const WIKTIONARY_API = (word) =>
 // NYT's own Wordle rolls over at midnight Eastern Time, not local time, so the
 // date used to look up "today's" puzzle must be computed in America/New_York.
 const WORDLE_API = (dateStr) => `https://www.nytimes.com/svc/wordle/v2/${dateStr}.json`;
-// If the browser can't reach the NYT endpoint directly (some browsers/networks
-// don't get an Access-Control-Allow-Origin header back from it), fall back to a
-// couple of public CORS relays before giving up.
+// The NYT endpoint never sends an Access-Control-Allow-Origin header, so a
+// browser fetch to it from a GitHub Pages origin (or any origin) is always
+// blocked by CORS -- that's not flaky, it's guaranteed to fail every time.
+// A GitHub Actions workflow (.github/workflows/update-wordle.yml) fetches the
+// puzzle server-side once a day, where CORS doesn't apply, and commits it here
+// so it's served same-origin with the rest of the site.
+const LOCAL_ARCHIVE_URL = "data/wordle-answers.json";
+// Only reached if today's date isn't in the local archive yet (e.g. the daily
+// workflow hasn't run since rollover). Public CORS relays are unreliable
+// (rate limits, outages, some now require an API key), so these are a
+// last-resort fallback, not the primary path.
 const CORS_PROXIES = [
-  (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+  (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
   (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
 ];
 
@@ -38,7 +46,26 @@ function todaysEasternDate() {
   }).format(new Date());
 }
 
+// Same-origin, so no CORS involved at all. Returns null (rather than
+// throwing) if the archive doesn't have today's date yet, so the caller can
+// fall through to the live-fetch attempts below.
+async function fetchFromLocalArchive(dateStr) {
+  try {
+    const res = await fetch(LOCAL_ARCHIVE_URL, { cache: "no-store" });
+    if (!res.ok) return null;
+    const archive = await res.json();
+    const entry = archive?.[dateStr];
+    if (!entry || typeof entry.solution !== "string") return null;
+    return entry;
+  } catch {
+    return null;
+  }
+}
+
 async function fetchTodaysWordle(dateStr) {
+  const fromArchive = await fetchFromLocalArchive(dateStr);
+  if (fromArchive) return fromArchive;
+
   const url = WORDLE_API(dateStr);
   const attempts = [url, ...CORS_PROXIES.map((make) => make(url))];
   let lastErr;
@@ -57,7 +84,12 @@ async function fetchTodaysWordle(dateStr) {
     }
   }
 
-  throw lastErr || new Error("Could not reach the NYT Wordle API");
+  throw (
+    lastErr ||
+    new Error(
+      "Could not reach the NYT Wordle API, and today's date isn't in the local archive yet"
+    )
+  );
 }
 
 function renderFormula(id, tex, displayMode = false) {
@@ -1489,9 +1521,9 @@ async function initTodaySolve() {
     console.error("Entrople: couldn't fetch today's Wordle", err);
     setTodayFetchStatus("Could not reach the NYT Wordle API.", "error");
     showTodayError(
-      "Entrople couldn't fetch today's answer just now — the NYT endpoint doesn't always allow " +
-        "direct cross-origin requests from a browser, and a public CORS relay was tried as a " +
-        "fallback and also failed. You can retry, or enter today's answer yourself below."
+      "Entrople couldn't fetch today's answer just now — it isn't in the local archive yet, the " +
+        "NYT endpoint blocks direct cross-origin requests from a browser, and the public CORS " +
+        "relays tried as a fallback also failed. You can retry, or enter today's answer yourself below."
     );
     return;
   }
