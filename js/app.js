@@ -1702,7 +1702,10 @@ function renderSimOpenerDetail(container, result) {
   }
 }
 
-function buildSimOpenerRow(result) {
+// `noteText`, when passed, overrides the default win/fail phrasing in the
+// row's subtitle -- used by the Longest Thinking list to show compute time
+// instead of (or alongside) the guess count.
+function buildSimOpenerRow(result, noteText) {
   const row = document.createElement("div");
   row.className = "sim-opener-row";
 
@@ -1713,7 +1716,7 @@ function buildSimOpenerRow(result) {
     <span class="chev">▶</span>
     <b>${result.opener}</b>
     <span class="sim-opener-note">${
-      result.solved ? `solved in ${plural(result.guessCount, "guess")}` : "never converged"
+      noteText || (result.solved ? `solved in ${plural(result.guessCount, "guess")}` : "never converged")
     }</span>
     <span class="sim-opener-tag ${result.solved ? "won" : "failed"}">${result.solved ? "WIN" : "FAIL"}</span>
   `;
@@ -1733,6 +1736,109 @@ function buildSimOpenerRow(result) {
   row.appendChild(head);
   row.appendChild(detail);
   return row;
+}
+
+// --- Small stats helpers for the simulation summary, kept local to this
+// section since nothing else in the app needs them. ---
+
+function median(nums) {
+  if (!nums.length) return null;
+  const sorted = [...nums].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+// Population standard deviation of guess counts among wins: a compact way to
+// show how *consistent* an opener pool is, independent of its average. Two
+// pools can share the same average guess count while one is all 3s-and-4s
+// and the other swings between 2 and 6 -- the average alone hides that.
+function stdDev(nums) {
+  if (nums.length < 2) return null;
+  const mean = nums.reduce((a, b) => a + b, 0) / nums.length;
+  const variance = nums.reduce((sum, n) => sum + (n - mean) ** 2, 0) / nums.length;
+  return Math.sqrt(variance);
+}
+
+function formatMs(ms) {
+  if (ms == null || Number.isNaN(ms)) return "–";
+  if (ms < 1) return "<1 ms";
+  if (ms < 1000) return `${ms.toFixed(ms < 10 ? 2 : 1)} ms`;
+  return `${(ms / 1000).toFixed(2)} s`;
+}
+
+function hasDuplicateLetters(word) {
+  return new Set(word.split("")).size < word.length;
+}
+
+// Aggregate letter/structure stats for a cohort of opener words (e.g. every
+// winning opener, or every opener that never converged), so the two cohorts
+// can be compared side by side. Nothing here is used by the entropy search
+// itself -- it's descriptive, after-the-fact insight into what winning vs.
+// failing openers tended to look like in this particular run.
+function simLetterProfile(openerWords) {
+  if (!openerWords.length) return null;
+  const totalVowels = openerWords.reduce((sum, w) => sum + vowelsIn(w).length, 0);
+  const totalUnique = openerWords.reduce((sum, w) => sum + new Set(w.split("")).size, 0);
+  const dupCount = openerWords.filter(hasDuplicateLetters).length;
+  return {
+    count: openerWords.length,
+    avgVowels: totalVowels / openerWords.length,
+    avgUniqueLetters: totalUnique / openerWords.length,
+    dupRatePct: (dupCount / openerWords.length) * 100,
+  };
+}
+
+function renderSimLetterInsights(wins, fails) {
+  const intro = document.querySelector("#simLetterIntro");
+  const grid = document.querySelector("#simLetterGrid");
+  grid.innerHTML = "";
+
+  const winProfile = simLetterProfile(wins.map((r) => r.opener));
+  const failProfile = simLetterProfile(fails.map((r) => r.opener));
+
+  if (!winProfile || !failProfile) {
+    intro.textContent = winProfile
+      ? "Every tested opener converged this run, so there's no failing cohort to compare letter patterns against."
+      : "No winning openers this run to profile.";
+    return;
+  }
+
+  intro.textContent =
+    `Comparing the ${plural(winProfile.count, "opener")} that won against the ${plural(
+      failProfile.count,
+      "opener"
+    )} that never converged, purely by surface letter patterns -- not something the entropy search itself weighs.`;
+
+  const rows = [
+    {
+      label: "Avg. vowels per opener",
+      win: winProfile.avgVowels.toFixed(2),
+      fail: failProfile.avgVowels.toFixed(2),
+    },
+    {
+      label: "Avg. unique letters",
+      win: winProfile.avgUniqueLetters.toFixed(2),
+      fail: failProfile.avgUniqueLetters.toFixed(2),
+    },
+    {
+      label: "Has a repeated letter",
+      win: `${winProfile.dupRatePct.toFixed(0)}%`,
+      fail: `${failProfile.dupRatePct.toFixed(0)}%`,
+    },
+  ];
+
+  grid.innerHTML = `
+    <span></span><span class="sll-head">WINS</span><span class="sll-head">FAILS</span>
+    ${rows
+      .map(
+        (r) => `
+      <span class="sll-label">${r.label}</span>
+      <span class="sll-val win">${r.win}</span>
+      <span class="sll-val fail">${r.fail}</span>
+    `
+      )
+      .join("")}
+  `;
 }
 
 function finishSimulation(cancelled) {
@@ -1767,6 +1873,29 @@ function finishSimulation(cancelled) {
   document.querySelector("#simAvg").textContent = avgGuesses ? avgGuesses.toFixed(2) : "–";
   document.querySelector("#simFails").textContent = fails.length.toLocaleString();
 
+  // Median + spread of guess counts among wins. The average alone can't tell
+  // a pool that's uniformly 3-4 guesses apart from one that swings wildly
+  // between 2 and 6 -- these two numbers together can.
+  const winGuessCounts = wins.map((r) => r.guessCount);
+  const medianGuesses = median(winGuessCounts);
+  const guessSpread = stdDev(winGuessCounts);
+  document.querySelector("#simMedian").textContent = medianGuesses != null ? medianGuesses.toFixed(1) : "–";
+  document.querySelector("#simStdDev").textContent = guessSpread != null ? `±${guessSpread.toFixed(2)}` : "–";
+
+  // Per-game compute time, timed individually in both the worker and the
+  // main-thread fallback (see simulateGameFromOpener callers), not just
+  // averaged across the whole batch.
+  const timedResults = simResults.filter((r) => typeof r.elapsedMs === "number");
+  const avgMs = timedResults.length
+    ? timedResults.reduce((sum, r) => sum + r.elapsedMs, 0) / timedResults.length
+    : null;
+  const slowest = timedResults.length
+    ? [...timedResults].sort((a, b) => b.elapsedMs - a.elapsedMs)
+    : [];
+  document.querySelector("#simAvgTime").textContent = formatMs(avgMs);
+  document.querySelector("#simMaxTime").textContent = slowest.length ? formatMs(slowest[0].elapsedMs) : "–";
+  document.querySelector("#simMaxTimeLabel").textContent = slowest.length ? slowest[0].opener : "–";
+
   const buckets = [1, 2, 3, 4, 5, 6];
   const bucketCounts = buckets.map((n) => wins.filter((r) => r.guessCount === n).length);
   const maxCount = Math.max(1, ...bucketCounts, fails.length);
@@ -1774,14 +1903,17 @@ function finishSimulation(cancelled) {
   const distEl = document.querySelector("#simDist");
   distEl.innerHTML = "";
 
+  let runningTotal = 0;
   buckets.forEach((n, i) => {
     const count = bucketCounts[i];
+    runningTotal += count;
+    const cumPct = (runningTotal / total) * 100;
     const row = document.createElement("div");
     row.className = "sim-dist-row";
     row.innerHTML = `
       <span>${plural(n, "guess")}</span>
       <div class="sim-dist-bar-track"><div class="sim-dist-bar-fill" style="width:${(count / maxCount) * 100}%"></div></div>
-      <span class="count">${count.toLocaleString()}</span>
+      <span class="count">${count.toLocaleString()}<span class="cum">${cumPct.toFixed(0)}% cum.</span></span>
     `;
     distEl.appendChild(row);
   });
@@ -1812,6 +1944,25 @@ function finishSimulation(cancelled) {
   bestEl.innerHTML = "";
   fastest.forEach((r) => bestEl.appendChild(buildSimOpenerRow(r)));
 
+  // Hardest openers: among the ones that *did* win, which came closest to
+  // running out of guesses. Distinct from the never-converged list below --
+  // these are the near-misses, not the outright failures.
+  const hardestCard = document.querySelector("#simHardestCard");
+  const hardestEl = document.querySelector("#simHardest");
+  const hardestIntro = document.querySelector("#simHardestIntro");
+  hardestEl.innerHTML = "";
+
+  const slowestWins = [...sortedWins].reverse().slice(0, 5);
+  if (slowestWins.length && slowestWins[0].guessCount >= 4) {
+    hardestCard.classList.remove("hidden");
+    hardestIntro.textContent =
+      `Even among wins, some openers left the search cutting it close. Slowest winning route took ` +
+      `${plural(slowestWins[0].guessCount, "guess")}. Tap any row for the full route.`;
+    slowestWins.forEach((r) => hardestEl.appendChild(buildSimOpenerRow(r)));
+  } else {
+    hardestCard.classList.add("hidden");
+  }
+
   const failCard = document.querySelector("#simFailCard");
   const failListEl = document.querySelector("#simFailList");
   failListEl.innerHTML = "";
@@ -1829,6 +1980,21 @@ function finishSimulation(cancelled) {
   } else {
     failCard.classList.add("hidden");
   }
+
+  // Longest Thinking: the individual games that took the search the longest
+  // to compute, win or lose -- a look at computational cost rather than
+  // solve quality. Usually correlates with a slow-narrowing candidate pool
+  // somewhere along that specific route.
+  const slowestEl = document.querySelector("#simSlowest");
+  slowestEl.innerHTML = "";
+  slowest.slice(0, 5).forEach((r) => {
+    const noteText = `${formatMs(r.elapsedMs)} to compute · ${
+      r.solved ? `solved in ${plural(r.guessCount, "guess")}` : "never converged"
+    }`;
+    slowestEl.appendChild(buildSimOpenerRow(r, noteText));
+  });
+
+  renderSimLetterInsights(wins, fails);
 
   simSummaryEl.classList.remove("hidden");
 
@@ -1887,7 +2053,10 @@ async function runSimulationOnMainThread(answer, openers, answerPool, fullDictio
   for (let i = 0; i < total; i++) {
     if (token !== simRunToken) return; // cancelled mid-run
 
-    batch.push(simulateGameFromOpener(answer, openers[i], answerPool, fullDictionary, hardMode));
+    const gameStartedAt = performance.now();
+    const result = simulateGameFromOpener(answer, openers[i], answerPool, fullDictionary, hardMode);
+    result.elapsedMs = performance.now() - gameStartedAt;
+    batch.push(result);
 
     if (batch.length >= BATCH || i === total - 1) {
       handleSimMessage({ type: "progress", batch, done: i + 1, total }, token);

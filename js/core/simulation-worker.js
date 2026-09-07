@@ -25,7 +25,14 @@ function runSimulation({ answer, openers, answerPool, fullDictionaryArr, hardMod
   const startedAt = Date.now();
 
   for (let i = 0; i < total; i++) {
-    batch.push(simulateGameFromOpener(answer, openers[i], answerPool, fullDictionary, hardMode));
+    // Timed individually (not just the batch total) so the UI can surface
+    // which specific openers made the entropy search work hardest -- e.g. a
+    // duplicate-letter opener against a large late-game candidate pool can
+    // take meaningfully longer to search than a high-information opener.
+    const gameStartedAt = performance.now();
+    const result = simulateGameFromOpener(answer, openers[i], answerPool, fullDictionary, hardMode);
+    result.elapsedMs = performance.now() - gameStartedAt;
+    batch.push(result);
 
     if (batch.length >= BATCH || i === total - 1) {
       self.postMessage({ type: "progress", batch, done: i + 1, total });

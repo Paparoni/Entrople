@@ -208,6 +208,14 @@
 .sim-mini-row{display:flex;gap:5px;align-items:center}
 .sim-mini-row .tile{width:30px;height:30px;font-size:13px}
 .sim-mini-row .sim-mini-meta{font:10px DM Mono,monospace;color:#7c7e77;margin-left:8px}
+.sim-metric-grid-secondary{margin-top:14px}
+.sim-letter-grid{display:grid;grid-template-columns:1fr auto auto;column-gap:18px;row-gap:10px;align-items:center;margin:14px 0 0;font:12px DM Mono,monospace}
+.sim-letter-grid .sll-head{font:600 9px DM Mono,monospace;letter-spacing:.08em;color:#8a8c84;text-align:right}
+.sim-letter-grid .sll-label{font-size:11px;color:#4c4e48}
+.sim-letter-grid .sll-val{text-align:right;font-weight:600;min-width:44px}
+.sim-letter-grid .sll-val.win{color:var(--green)}
+.sim-letter-grid .sll-val.fail{color:var(--orange)}
+.sim-dist-row .cum{font-size:9px;color:#9a9c93;margin-left:6px}
 .sim-cancelled-note{font-size:11px;color:var(--orange);margin:0 0 18px;padding:10px 12px;background:#fbeee7;border:1px solid var(--orange)}
 
 @media(max-width:900px){.intro{grid-template-columns:1fr;gap:26px}.workspace{grid-template-columns:1fr}.entry-panel{position:static}.intro h1{font-size:59px}}

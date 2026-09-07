@@ -288,8 +288,15 @@
               <article class="metric"><p>MATH FAILED</p><strong id="simFails">0</strong><span>never converged in 6</span></article>
             </div>
 
+            <div class="metric-grid sim-metric-grid sim-metric-grid-secondary">
+              <article class="metric"><p>MEDIAN GUESSES</p><strong id="simMedian">–</strong><span>among wins</span></article>
+              <article class="metric"><p>CONSISTENCY (σ)</p><strong id="simStdDev">–</strong><span>guess-count spread, lower = steadier</span></article>
+              <article class="metric"><p>AVG THINK TIME</p><strong id="simAvgTime">–</strong><span>per simulated game</span></article>
+              <article class="metric"><p>SLOWEST GAME</p><strong id="simMaxTime">–</strong><span id="simMaxTimeLabel">–</span></article>
+            </div>
+
             <article class="math-card">
-              <div class="math-title"><p>SOLVE DISTRIBUTION</p><span>GUESSES TO WIN</span></div>
+              <div class="math-title"><p>SOLVE DISTRIBUTION</p><span>GUESSES TO WIN, WITH RUNNING TOTAL</span></div>
               <div id="simDist" class="sim-dist"></div>
             </article>
 
@@ -299,10 +306,28 @@
               <div id="simBest" class="sim-opener-list"></div>
             </article>
 
+            <article class="math-card hidden" id="simHardestCard">
+              <div class="math-title"><p>HARDEST OPENERS TO SOLVE WITH</p><span>CLOSEST CALLS AMONG THE WINS</span></div>
+              <p class="deep-intro" id="simHardestIntro"></p>
+              <div id="simHardest" class="sim-opener-list"></div>
+            </article>
+
             <article class="math-card hidden" id="simFailCard">
               <div class="math-title"><p>WHERE THE ENTROPY MATH FAILED</p><span>NO WIN INSIDE 6 GUESSES</span></div>
               <p class="deep-intro">These openers left the win-bonus-adjusted entropy search a candidate pool it couldn't cut down to one word within six guesses. Tap any of them for the full guess-by-guess route.</p>
               <div id="simFailList" class="sim-opener-list"></div>
+            </article>
+
+            <article class="math-card">
+              <div class="math-title"><p>LONGEST THINKING</p><span>SLOWEST OPENERS TO COMPUTE</span></div>
+              <p class="deep-intro" id="simSlowestIntro">Per-game compute time for the win-bonus-adjusted search, timed individually rather than just averaged across the whole batch. A slow game usually means a large, slow-narrowing candidate pool somewhere along its route, not necessarily a failed one.</p>
+              <div id="simSlowest" class="sim-opener-list"></div>
+            </article>
+
+            <article class="math-card" id="simLetterCard">
+              <div class="math-title"><p>LETTER &amp; STRUCTURE INSIGHTS</p><span>WINNING VS. NEVER-CONVERGED OPENERS</span></div>
+              <p class="deep-intro" id="simLetterIntro"></p>
+              <div id="simLetterGrid" class="sim-letter-grid"></div>
             </article>
           </div>
         </section>
