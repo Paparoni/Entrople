@@ -1791,7 +1791,9 @@ function simLetterProfile(openerWords) {
 function renderSimLetterInsights(wins, fails) {
   const intro = document.querySelector("#simLetterIntro");
   const grid = document.querySelector("#simLetterGrid");
+  const chartEl = document.querySelector("#simLetterChart");
   grid.innerHTML = "";
+  chartEl.innerHTML = "";
 
   const winProfile = simLetterProfile(wins.map((r) => r.opener));
   const failProfile = simLetterProfile(fails.map((r) => r.opener));
@@ -1838,6 +1840,250 @@ function renderSimLetterInsights(wins, fails) {
     `
       )
       .join("")}
+  `;
+
+  chartEl.innerHTML = buildGroupedBarChart([
+    { label: "AVG VOWELS", win: winProfile.avgVowels, fail: failProfile.avgVowels, fmt: (v) => v.toFixed(1) },
+    {
+      label: "AVG UNIQUE LETTERS",
+      win: winProfile.avgUniqueLetters,
+      fail: failProfile.avgUniqueLetters,
+      fmt: (v) => v.toFixed(1),
+    },
+    {
+      label: "REPEATED LETTER %",
+      win: winProfile.dupRatePct,
+      fail: failProfile.dupRatePct,
+      fmt: (v) => `${v.toFixed(0)}%`,
+    },
+  ]);
+}
+
+// --- Inline SVG chart builders ---------------------------------------------
+// No chart library is loaded (or needed) for a handful of small, static
+// charts -- these build plain SVG strings by hand, styled with the same CSS
+// custom properties (--green/--orange/etc.) as the rest of the page, so they
+// inherit the design system for free and cost nothing to load.
+
+// Two-segment donut: win rate vs. fail rate. `segments` is
+// [{ value, colorVar }, ...] in draw order, starting at 12 o'clock.
+function buildDonutSvg(segments, centerLines) {
+  const total = segments.reduce((sum, s) => sum + s.value, 0);
+  const r = 62;
+  const cx = 80;
+  const cy = 80;
+  const circumference = 2 * Math.PI * r;
+  let cumulative = 0;
+
+  const arcs = segments
+    .map((seg) => {
+      if (!total || !seg.value) return "";
+      const len = (seg.value / total) * circumference;
+      const dashoffset = -cumulative;
+      cumulative += len;
+      return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${seg.colorVar}" stroke-width="24"
+        stroke-dasharray="${len} ${circumference - len}" stroke-dashoffset="${dashoffset}"
+        transform="rotate(-90 ${cx} ${cy})"/>`;
+    })
+    .join("");
+
+  const centerSvg = (centerLines || [])
+    .map(
+      (line, i) =>
+        `<text x="${cx}" y="${cy + (i === 0 ? -2 : 16)}" text-anchor="middle" font-size="${
+          i === 0 ? 26 : 9
+        }" font-weight="${i === 0 ? 700 : 500}" letter-spacing="${i === 0 ? 0 : 1}" fill="${
+          i === 0 ? "var(--ink)" : "#7a7c74"
+        }">${line}</text>`
+    )
+    .join("");
+
+  return `
+    <svg viewBox="0 0 160 160" class="sim-chart sim-donut" role="img" aria-label="Win vs fail split">
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#ecebe3" stroke-width="24"/>
+      ${arcs}
+      ${centerSvg}
+    </svg>
+  `;
+}
+
+// Cumulative solve-rate curve across guesses 1-6: what fraction of every
+// simulated game (wins + fails) had already been solved by guess N. Distinct
+// from the per-bucket bars, which show counts landing in each bucket rather
+// than the running total.
+function buildCumulativeChart(bucketCounts, total) {
+  const width = 560;
+  const height = 190;
+  const padL = 34;
+  const padR = 14;
+  const padT = 14;
+  const padB = 26;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+  const n = bucketCounts.length;
+
+  let running = 0;
+  const points = bucketCounts.map((count, i) => {
+    running += count;
+    const pct = total ? (running / total) * 100 : 0;
+    const x = padL + (i / (n - 1)) * plotW;
+    const y = padT + plotH - (pct / 100) * plotH;
+    return { x, y, pct };
+  });
+
+  const gridLines = [0, 25, 50, 75, 100]
+    .map((pct) => {
+      const y = padT + plotH - (pct / 100) * plotH;
+      return `
+        <line x1="${padL}" y1="${y}" x2="${width - padR}" y2="${y}" stroke="#e3e2d9" stroke-width="1"/>
+        <text x="${padL - 8}" y="${y + 3}" text-anchor="end" font-size="9" fill="#9a9c93">${pct}%</text>
+      `;
+    })
+    .join("");
+
+  const xLabels = points
+    .map((p, i) => `<text x="${p.x}" y="${height - 6}" text-anchor="middle" font-size="9" fill="#9a9c93">G${i + 1}</text>`)
+    .join("");
+
+  const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
+  const areaPath = `${linePath} L ${points[points.length - 1].x.toFixed(1)} ${padT + plotH} L ${points[0].x.toFixed(
+    1
+  )} ${padT + plotH} Z`;
+
+  const dots = points
+    .map(
+      (p, i) =>
+        `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5" fill="var(--green)"><title>Solved by guess ${
+          i + 1
+        }: ${p.pct.toFixed(1)}%</title></circle>`
+    )
+    .join("");
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" class="sim-chart" role="img" aria-label="Cumulative solve rate by guess number">
+      ${gridLines}
+      <path d="${areaPath}" fill="var(--green)" opacity="0.12"/>
+      <path d="${linePath}" fill="none" stroke="var(--green)" stroke-width="2"/>
+      ${dots}
+      ${xLabels}
+    </svg>
+  `;
+}
+
+// Deterministic small jitter (not random) so re-rendering the same results
+// doesn't reshuffle point positions, while still spreading overlapping dots
+// at the same x apart enough to see individually.
+function jitterFor(word) {
+  let hash = 0;
+  for (let i = 0; i < word.length; i++) hash = (hash * 31 + word.charCodeAt(i)) >>> 0;
+  return ((hash % 1000) / 1000 - 0.5) * 0.7; // roughly -0.35..0.35
+}
+
+// Scatter of compute time vs. outcome: one dot per simulated game, x is the
+// guess count it finished on (or a dedicated "never converged" column), y is
+// how long that individual game took the search to compute. Answers "does
+// difficulty (more guesses) actually cost more compute?" at a glance --
+// often it doesn't, since a big early candidate pool can be just as slow to
+// search as a genuinely hard late-game one.
+function buildTimingScatter(results) {
+  const width = 560;
+  const height = 210;
+  const padL = 40;
+  const padR = 14;
+  const padT = 14;
+  const padB = 30;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+
+  const categories = [1, 2, 3, 4, 5, 6, "F"];
+  const maxMs = Math.max(1, ...results.map((r) => r.elapsedMs || 0));
+
+  const colX = (cat) => padL + (categories.indexOf(cat) / (categories.length - 1)) * plotW;
+  const valY = (ms) => padT + plotH - (Math.min(ms, maxMs) / maxMs) * plotH;
+
+  const gridLines = [0, 0.25, 0.5, 0.75, 1]
+    .map((frac) => {
+      const y = padT + plotH - frac * plotH;
+      return `
+        <line x1="${padL}" y1="${y}" x2="${width - padR}" y2="${y}" stroke="#e3e2d9" stroke-width="1"/>
+        <text x="${padL - 8}" y="${y + 3}" text-anchor="end" font-size="9" fill="#9a9c93">${formatMs(frac * maxMs)}</text>
+      `;
+    })
+    .join("");
+
+  const xLabels = categories
+    .map(
+      (cat) =>
+        `<text x="${colX(cat)}" y="${height - 8}" text-anchor="middle" font-size="9" fill="#9a9c93">${
+          cat === "F" ? "FAIL" : `G${cat}`
+        }</text>`
+    )
+    .join("");
+
+  const colWidth = plotW / (categories.length - 1);
+  const dots = results
+    .filter((r) => typeof r.elapsedMs === "number")
+    .map((r) => {
+      const cat = r.solved ? r.guessCount : "F";
+      const x = colX(cat) + jitterFor(r.opener) * colWidth * 0.6;
+      const y = valY(r.elapsedMs);
+      const color = r.solved ? "var(--green)" : "var(--orange)";
+      return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.2" fill="${color}" fill-opacity="0.75">
+        <title>${r.opener}: ${formatMs(r.elapsedMs)}${r.solved ? `, solved in ${r.guessCount}` : ", never converged"}</title>
+      </circle>`;
+    })
+    .join("");
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" class="sim-chart" role="img" aria-label="Compute time vs. guesses used, one dot per simulated game">
+      ${gridLines}
+      ${dots}
+      ${xLabels}
+    </svg>
+  `;
+}
+
+// Grouped bar chart: one group per metric, a win bar and a fail bar in each,
+// scaled to that metric's own max (a duplicate-letter rate of 0-100% and an
+// average-vowels count of 0-5 can't share one y-axis meaningfully).
+function buildGroupedBarChart(metrics) {
+  const width = 560;
+  const height = 170;
+  const padT = 24;
+  const padB = 26;
+  const plotH = height - padT - padB;
+  const groupW = width / metrics.length;
+  const barW = 34;
+  const gap = 10;
+
+  const groups = metrics
+    .map((m, i) => {
+      const groupX = i * groupW;
+      const maxVal = Math.max(m.win, m.fail, 0.0001);
+      const winH = (m.win / maxVal) * plotH;
+      const failH = (m.fail / maxVal) * plotH;
+      const winX = groupX + groupW / 2 - barW - gap / 2;
+      const failX = groupX + groupW / 2 + gap / 2;
+
+      return `
+        <text x="${groupX + groupW / 2}" y="${height - 8}" text-anchor="middle" font-size="9" fill="#7c7e77">${m.label}</text>
+        <rect x="${winX}" y="${padT + plotH - winH}" width="${barW}" height="${winH}" fill="var(--green)"/>
+        <text x="${winX + barW / 2}" y="${padT + plotH - winH - 6}" text-anchor="middle" font-size="10" font-weight="600" fill="var(--green)">${m.fmt(
+        m.win
+      )}</text>
+        <rect x="${failX}" y="${padT + plotH - failH}" width="${barW}" height="${failH}" fill="var(--orange)"/>
+        <text x="${failX + barW / 2}" y="${padT + plotH - failH - 6}" text-anchor="middle" font-size="10" font-weight="600" fill="var(--orange)">${m.fmt(
+        m.fail
+      )}</text>
+      `;
+    })
+    .join("");
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" class="sim-chart" role="img" aria-label="Winning vs never-converged opener letter patterns">
+      <line x1="0" y1="${padT + plotH}" x2="${width}" y2="${padT + plotH}" stroke="#c9c8bc" stroke-width="1"/>
+      ${groups}
+    </svg>
   `;
 }
 
@@ -1896,6 +2142,19 @@ function finishSimulation(cancelled) {
   document.querySelector("#simMaxTime").textContent = slowest.length ? formatMs(slowest[0].elapsedMs) : "–";
   document.querySelector("#simMaxTimeLabel").textContent = slowest.length ? slowest[0].opener : "–";
 
+  // Win/fail donut + legend.
+  document.querySelector("#simDonut").innerHTML = buildDonutSvg(
+    [
+      { value: wins.length, colorVar: "var(--green)" },
+      { value: fails.length, colorVar: "var(--orange)" },
+    ],
+    [`${winRate.toFixed(0)}%`, "WIN RATE"]
+  );
+  document.querySelector("#simDonutLegend").innerHTML = `
+    <div class="lg-row"><span class="lg-swatch win"></span><span>Won</span><span class="lg-val">${wins.length.toLocaleString()}</span></div>
+    <div class="lg-row"><span class="lg-swatch fail"></span><span>Never converged</span><span class="lg-val">${fails.length.toLocaleString()}</span></div>
+  `;
+
   const buckets = [1, 2, 3, 4, 5, 6];
   const bucketCounts = buckets.map((n) => wins.filter((r) => r.guessCount === n).length);
   const maxCount = Math.max(1, ...bucketCounts, fails.length);
@@ -1926,6 +2185,9 @@ function finishSimulation(cancelled) {
     <span class="count">${fails.length.toLocaleString()}</span>
   `;
   distEl.appendChild(failRow);
+
+  document.querySelector("#simCumulativeChart").innerHTML = buildCumulativeChart(bucketCounts, total);
+  document.querySelector("#simScatterChart").innerHTML = buildTimingScatter(timedResults);
 
   const sortedWins = [...wins].sort(
     (a, b) => a.guessCount - b.guessCount || a.opener.localeCompare(b.opener)

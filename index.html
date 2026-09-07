@@ -296,8 +296,23 @@
             </div>
 
             <article class="math-card">
+              <div class="math-title"><p>WIN / FAIL SPLIT</p><span>ALL SIMULATED GAMES</span></div>
+              <div class="sim-donut-wrap">
+                <div id="simDonut"></div>
+                <div id="simDonutLegend" class="sim-chart-legend"></div>
+              </div>
+            </article>
+
+            <article class="math-card">
               <div class="math-title"><p>SOLVE DISTRIBUTION</p><span>GUESSES TO WIN, WITH RUNNING TOTAL</span></div>
               <div id="simDist" class="sim-dist"></div>
+              <div id="simCumulativeChart"></div>
+            </article>
+
+            <article class="math-card">
+              <div class="math-title"><p>COMPUTE TIME VS. OUTCOME</p><span>ONE DOT PER SIMULATED GAME</span></div>
+              <div id="simScatterChart"></div>
+              <p class="sim-scatter-note">Green = won (grouped by guesses used) · Orange = never converged. Dots are jittered slightly so overlapping games stay visible; hover a dot for the exact opener and time.</p>
             </article>
 
             <article class="math-card">
@@ -327,6 +342,7 @@
             <article class="math-card" id="simLetterCard">
               <div class="math-title"><p>LETTER &amp; STRUCTURE INSIGHTS</p><span>WINNING VS. NEVER-CONVERGED OPENERS</span></div>
               <p class="deep-intro" id="simLetterIntro"></p>
+              <div id="simLetterChart"></div>
               <div id="simLetterGrid" class="sim-letter-grid"></div>
             </article>
           </div>

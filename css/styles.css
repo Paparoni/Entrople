@@ -216,6 +216,19 @@
 .sim-letter-grid .sll-val.win{color:var(--green)}
 .sim-letter-grid .sll-val.fail{color:var(--orange)}
 .sim-dist-row .cum{font-size:9px;color:#9a9c93;margin-left:6px}
+.sim-chart-row{display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:center;margin:14px 0 0}
+.sim-chart{width:100%;height:auto;display:block;overflow:visible}
+.sim-chart text{font-family:"DM Mono",monospace}
+.sim-donut-wrap{display:flex;align-items:center;gap:20px}
+.sim-donut{width:150px;flex:0 0 150px}
+.sim-chart-legend{display:flex;flex-direction:column;gap:8px;font:11px DM Mono,monospace}
+.sim-chart-legend .lg-row{display:flex;align-items:center;gap:8px}
+.sim-chart-legend .lg-swatch{width:10px;height:10px;flex:0 0 10px}
+.sim-chart-legend .lg-swatch.win{background:var(--green)}
+.sim-chart-legend .lg-swatch.fail{background:var(--orange)}
+.sim-chart-legend .lg-val{margin-left:auto;font-weight:600}
+.sim-scatter-note{font-size:9px;color:#9a9c93;margin:10px 0 0}
+@media(max-width:760px){.sim-chart-row{grid-template-columns:1fr}}
 .sim-cancelled-note{font-size:11px;color:var(--orange);margin:0 0 18px;padding:10px 12px;background:#fbeee7;border:1px solid var(--orange)}
 
 @media(max-width:900px){.intro{grid-template-columns:1fr;gap:26px}.workspace{grid-template-columns:1fr}.entry-panel{position:static}.intro h1{font-size:59px}}
