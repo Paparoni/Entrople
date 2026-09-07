@@ -2,9 +2,11 @@ name: Update today's Wordle answer
 
 on:
   schedule:
-    # 06:00 UTC is after midnight Eastern year-round (01:00 EST / 02:00 EDT),
-    # so the NYT date has always rolled over by the time this runs.
-    - cron: "0 6 * * *"
+    # Runs at both possible Eastern midnights (4:01am UTC = midnight EDT,
+    # 5:01am UTC = midnight EST) so it fires within a minute of local
+    # midnight year-round without manual DST changes. The script skips
+    # the fetch if it already has today's date, so the extra run is a no-op.
+    - cron: "1 4,5 * * *"
   workflow_dispatch: {}
 
 permissions:
@@ -15,14 +17,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-
       - name: Fetch today's Wordle answer
         run: node scripts/update-wordle.mjs
-
       - name: Commit and push if changed
         run: |
           git config user.name "github-actions[bot]"
