@@ -2,20 +2,28 @@ name: Update today's Wordle answer
 
 on:
   schedule:
-    # Runs at both possible Eastern midnights (4:01am UTC = midnight EDT,
-    # 5:01am UTC = midnight EST) so it fires within a minute of local
-    # midnight year-round without manual DST changes. The script skips
-    # the fetch if it already has today's date, so the extra run is a no-op.
-    - cron: "1 4,5 * * *"
+    # A single cron fire at 4:01/5:01 UTC (the two possible Eastern
+    # midnights) is best-effort only -- GitHub explicitly documents that
+    # scheduled workflows can be delayed, especially for low-traffic public
+    # repos when the scheduler queue is backed up. This repo has seen a fire
+    # land 4+ hours late. Rather than chase a single on-time shot, this runs
+    # every 15 minutes across a 5-hour window covering both possible
+    # midnights plus slack (4:00-8:59 UTC = 12:00am-4:59am EDT /
+    # 11:00pm-3:59am EST). Each run is a near-instant no-op once the archive
+    # already has today's date (see scripts/update-wordle.mjs), so the extra
+    # runs cost a few seconds of free public-repo Actions time, not
+    # meaningfully more.
+    - cron: "*/15 4-8 * * *"
   workflow_dispatch: {}
 
 permissions:
   contents: write
 
-# Scheduled triggers can occasionally run late; without this, an overlapping
-# 4:01/5:01 pair (or a manual dispatch landing mid-run) could race on the
-# same file and have one push get rejected as non-fast-forward. Queue them
-# instead of cancelling, so a slow run still gets to finish and commit.
+# With runs firing every 15 minutes for 5 hours, overlap is expected (a run
+# that takes a bit longer than usual can still be going when the next one
+# starts). Queue instead of cancel so a slow run finishes and commits, and
+# pull --rebase (below) means a normal overlap doesn't fail as
+# non-fast-forward.
 concurrency:
   group: update-wordle
   cancel-in-progress: false
