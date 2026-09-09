@@ -27,6 +27,8 @@
 .deep-stats strong{font:600 15px DM Mono,monospace;color:var(--ink);letter-spacing:-.02em}
 .deep-note{font-size:11px;line-height:1.6;color:#686a64;margin:12px 0 0}
 .deep-note b{color:var(--blue);font-family:DM Mono,monospace}
+.deep-warning{background:#fff6e5;border:1px solid #f0c25a;border-radius:6px;padding:8px 10px;color:#7a5b00;margin:0 0 12px}
+.deep-warning b{color:#7a5b00}
 .next-best{margin:14px 0 0;border-top:1px dashed #deddd5;padding-top:12px}
 .next-best-title{font:600 10px DM Mono,monospace;letter-spacing:.08em;color:#7c7e77;margin:0 0 8px}
 .next-best-list{display:flex;flex-direction:column;gap:8px}

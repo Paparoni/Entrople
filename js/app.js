@@ -67,7 +67,11 @@ async function fetchTodaysWordle(dateStr) {
   if (fromArchive) return fromArchive;
 
   const url = WORDLE_API(dateStr);
-  const attempts = [url, ...CORS_PROXIES.map((make) => make(url))];
+  // A direct browser fetch to NYT is not attempted here: it is blocked by
+  // CORS on every browser, every time (see the comment on WORDLE_API above),
+  // so trying it first only adds a guaranteed-failing round trip before
+  // falling through to the proxies that can actually succeed.
+  const attempts = CORS_PROXIES.map((make) => make(url));
   let lastErr;
 
   for (const attemptUrl of attempts) {
@@ -485,6 +489,14 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
     let totalBits = 0;
     const steps = [];
     let hardHistory = [];
+    // True once narrowing against the *real* feedback has stranded the pool
+    // at zero candidates -- i.e. the actual answer isn't a member of the
+    // tracked answer list (words.answers), so no remaining word matches every
+    // clue given so far. Once this happens we keep the last non-empty pool
+    // around for every later step instead of feeding an empty array into
+    // guessPartitionProfile / findBestGuesses, which is what used to produce
+    // NaN stats (and a NaN grade) for the rest of the solve.
+    let answerMissingFromPool = false;
 
     evaluatedGuesses.forEach((guess) => {
       const beforeCandidates = candidates;
@@ -502,9 +514,20 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
       // Only clues from guesses played before this one apply.
       hardHistory = [...hardHistory, { guess, code: actualCode }];
 
-      candidates = narrowCandidates(candidates, guess, actualCode);
-      const after = Math.max(candidates.length, 1);
+      const narrowed = narrowCandidates(candidates, guess, actualCode);
+      let poolExhaustedHere = false;
 
+      if (narrowed.length > 0) {
+        candidates = narrowed;
+      } else if (!answerMissingFromPool) {
+        // First step where the pool empties: flag it, but keep the prior
+        // (still non-empty) `candidates` alive so every later step keeps
+        // computing real numbers instead of NaN.
+        answerMissingFromPool = true;
+        poolExhaustedHere = true;
+      }
+
+      const after = Math.max(candidates.length, 1);
       const actualBits = Math.log2(before) - Math.log2(after);
       totalBits += actualBits;
 
@@ -512,11 +535,13 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
         guess,
         beforeCandidates,
         before,
-        after: candidates.length,
+        after: narrowed.length > 0 ? candidates.length : 0,
         actualBits,
         expected: profile.bits,
         profile,
         best,
+        poolExhaustedHere,
+        answerMissingFromPool,
       });
     });
 
@@ -546,6 +571,17 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
           <b>${String(i + 1).padStart(2, "0")} · ${step.guess}</b>
           <span>${step.before.toLocaleString()} → ${step.after.toLocaleString()} candidates</span>
         </div>
+        ${
+          step.poolExhaustedHere
+            ? `<p class="deep-note deep-warning">
+                 The answer <b>${answer}</b> isn't in Entrople's tracked answer list, so no
+                 candidate matches every clue given so far. The stats below (and any later
+                 step) fall back to the pool as it stood just before this guess, rather than
+                 an empty set, so the numbers stay meaningful -- but they can no longer track
+                 the real answer exactly.
+               </p>`
+            : ""
+        }
         <div class="deep-stats">
           <div><p>ACTUAL INFO GAINED</p><strong>${fmtBits(step.actualBits)}</strong></div>
           <div><p>EXPECTED (ENTROPY)</p><strong>${fmtBits(step.expected)}</strong></div>
@@ -688,6 +724,13 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
         ${
           candidates.length > 1 && !solvedAt
             ? `${candidates.length.toLocaleString()} candidates still remain unresolved.`
+            : ""
+        }
+        ${
+          answerMissingFromPool
+            ? ` Note: <b>${answer}</b> wasn't found in the tracked answer list at some point ` +
+              `in this solve, so candidate-narrowing stats from that step onward use the last ` +
+              `known pool rather than the true remaining set.`
             : ""
         }
       </p>

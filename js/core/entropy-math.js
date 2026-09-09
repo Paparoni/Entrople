@@ -72,13 +72,19 @@ function feedbackCode(guess, answer) {
 const _patternCounts = new Int32Array(243);
 
 function guessEntropy(guess, candidates) {
+  const total = candidates.length;
+  // Empty pool (e.g. the tracked answer list doesn't contain the real answer,
+  // so narrowing against true feedback stranded it at zero) has no
+  // patterns to score. Return a neutral zero profile instead of falling
+  // through to 0/0 divisions further down.
+  if (total === 0) return { bits: 0, pWin: 0, adjustedBits: 0 };
+
   _patternCounts.fill(0);
 
   for (let i = 0; i < candidates.length; i++) {
     _patternCounts[feedbackCode(guess, candidates[i])]++;
   }
 
-  const total = candidates.length;
   let bits = 0;
 
   for (let i = 0; i < 243; i++) {
@@ -119,12 +125,33 @@ function guessEntropy(guess, candidates) {
 // of p_win in ER is an increase of p_win in H. This is why the correction is just
 // "+p_win" and not some free parameter: it falls straight out of the substitution.
 function guessPartitionProfile(guess, candidates) {
+  const N = candidates.length;
+
+  // Same empty-pool guard as guessEntropy above. Without this, `mean = N / k`,
+  // `variance = .../k`, and `pWin = counts/N` all divide 0 by 0 and produce
+  // NaN, which then poisons every downstream score (grade, luck factor,
+  // guess-quality percentage) that reads this profile.
+  if (N === 0) {
+    return {
+      bits: 0,
+      pWin: 0,
+      adjustedBits: 0,
+      bucketsUsed: 0,
+      expectedRemaining: 0,
+      maxBucket: 0,
+      mean: 0,
+      variance: 0,
+      stdDev: 0,
+      klDivergence: 0,
+      buckets: [],
+    };
+  }
+
   _patternCounts.fill(0);
   for (let i = 0; i < candidates.length; i++) {
     _patternCounts[feedbackCode(guess, candidates[i])]++;
   }
 
-  const N = candidates.length;
   const buckets = [];
   let bits = 0;
   let sumSquares = 0;
