@@ -16,5 +16,11 @@
     "solution": "burst",
     "print_date": "2026-09-09",
     "days_since_launch": 1908
+  },
+  "2026-09-10": {
+    "id": 1126,
+    "solution": "dryly",
+    "print_date": "2026-09-10",
+    "days_since_launch": 1909
   }
 }
