@@ -22,5 +22,11 @@
     "solution": "dryly",
     "print_date": "2026-09-10",
     "days_since_launch": 1909
+  },
+  "2026-09-11": {
+    "id": 5121,
+    "solution": "aster",
+    "print_date": "2026-09-11",
+    "days_since_launch": 1910
   }
 }
