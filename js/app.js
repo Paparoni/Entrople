@@ -537,6 +537,7 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
         before,
         after: narrowed.length > 0 ? candidates.length : 0,
         actualBits,
+        cumulativeBits: totalBits,
         expected: profile.bits,
         profile,
         best,
@@ -666,13 +667,14 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
                     <b class="nb-word">${cand.word}</b>
                     <span class="nb-commonness nb-commonness-${commonness.tier}" title="How commonly this word is used in everyday English, not how likely it is to be the Wordle answer">${commonness.label}</span>
                     <span class="nb-bits" title="${cand.pWin > 0 ? `raw entropy ${cand.bits.toFixed(3)} + win-bonus ${cand.pWin.toFixed(3)}` : "raw entropy (no win-bonus: not a live candidate)"}">${fmtBits(cand.adjustedBits)}</span>
+                    <span class="nb-pool" title="Average remaining candidates across all 243 possible feedback patterns, and the worst case if the unluckiest pattern lands">${step.before.toLocaleString()} → ~${candProfile.expectedRemaining.toFixed(1)} avg <em>(worst ${candProfile.maxBucket.toLocaleString()})</em></span>
                     ${isPlayed ? '<span class="nb-tag">you played this</span>' : ""}
                     <p class="nb-why">${why}</p>
                   </div>`;
               })
               .join("")}
           </div>
-          <p class="next-best-mode-note">The ranking is Shannon entropy plus a win-bonus correction (Healy, 2022): a guess that could itself be the answer gets +p<sub>win</sub> bits added on top of its raw entropy, since winning outright beats merely narrowing the field to the same size without winning. This is what breaks the old tie between two guesses carrying identical bits: the one that's a live candidate now outranks the one that isn't. It still doesn't weight a word by anything beyond that specific correction, so among words that are equally live candidates (or equally not), the ranking is unchanged. The commonness badge and vowel note per word above are tidbits, not separate scoring terms: the badge reflects how often the word is used in everyday English globally (Google Books Ngram data), not Wordle-answer likelihood. Vowel coverage is already fully priced into the entropy number itself (see the citations in the formula reference above), so an explicit vowel bonus on top would just double-count it.</p>
+          <p class="next-best-mode-note">The ranking is Shannon entropy plus a win-bonus correction (Healy, 2022): a guess that could itself be the answer gets +p<sub>win</sub> bits added on top of its raw entropy, since winning outright beats merely narrowing the field to the same size without winning. This is what breaks the old tie between two guesses carrying identical bits: the one that's a live candidate now outranks the one that isn't. It still doesn't weight a word by anything beyond that specific correction, so among words that are equally live candidates (or equally not), the ranking is unchanged. The pool-size line under each word (average and worst-case remaining candidates) is the same entropy number expressed as candidate counts instead of bits, since "leaves ~4 words on average, worst case 9" is often easier to feel than "1.4 bits" -- they're the same underlying quantity, not a second score. The commonness badge and vowel note per word above are tidbits, not separate scoring terms: the badge reflects how often the word is used in everyday English globally (Google Books Ngram data), not Wordle-answer likelihood. Vowel coverage is already fully priced into the entropy number itself (see the citations in the formula reference above), so an explicit vowel bonus on top would just double-count it.</p>
         </div>
       `;
 
@@ -746,12 +748,12 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
       true
     );
 
-    renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency, theoreticalMin);
+    renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency, theoreticalMin, startSize);
     renderTraps(steps, solvedAt);
   }, 20);
 }
 
-// Composite 0-100 score: guess quality (45%), solve speed (35%), per-step luck (20%).
+// Composite 0-100 score: guess quality (35%), solve speed (25%), pool-reduction pace (25%), per-step luck (15%).
 //
 // Why not grade against the raw 7.92-bit (log2 243) ceiling or dock a flat
 // 12 points per guess used? Both treat an unreachable ideal as the baseline.
@@ -766,9 +768,18 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
 //   - Solve speed compares your guess count to a realistic target
 //     (the information-theoretic minimum, plus one extra guess of slack --
 //     since no real opening word partitions perfectly), not to "1 guess."
+//   - Pool reduction asks a blunter, guess-number-relative question: is the
+//     candidate pool where a solidly-played game should have it by now,
+//     given the guess number you're on? It paces against a slightly more
+//     forgiving target (theoreticalMin + 2) than Speed's own target, since
+//     pacing every guess along the way against Speed's more aggressive
+//     theoreticalMin + 1 would make even strong, realistic play look merely
+//     "on pace" rather than good. Reducing the pool far ahead of that pace
+//     (e.g. down to ~10 candidates by guess 2) scores above 100% here,
+//     uncapped up to 200%, so an outsized reduction reads as outsized.
 //   - Luck factor (already computed elsewhere) captures how the dice fell
 //     independent of whether the guess itself was sound.
-function renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency, theoreticalMin) {
+function renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency, theoreticalMin, startSize) {
   const card = document.querySelector("#gradeCard");
   card.classList.remove("disabled");
 
@@ -795,11 +806,43 @@ function renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency, theo
     ? Math.max(0, 100 - Math.max(0, solvedAt - speedTarget) * 15)
     : 0;
 
-  const WEIGHTS = { quality: 0.45, speed: 0.35, luck: 0.2 };
+  // How much did each guess actually shrink the candidate pool, *for the
+  // guess number it was played on* -- distinct from Luck Factor above, which
+  // only asks "did this specific guess beat its own entropy expectation."
+  // This asks a blunter question: given you're on guess N, is the candidate
+  // pool where a solidly-played game "should" have it by now? A guess that
+  // collapses the pool far ahead of that pace (e.g. down to ~10 candidates
+  // by guess 2) scores well above 100% here, uncapped up to 200%, so an
+  // outsized reduction actually shows up as outsized rather than getting
+  // quietly averaged away.
+  //
+  // This paces against theoreticalMin + 2, not the Speed score's own
+  // theoreticalMin + 1 (speedTarget). Speed grades your *final* guess count
+  // against an aggressive, near-best-case target -- fair, since it only has
+  // to be hit once, at the end. Pacing *every single guess along the way*
+  // against that same aggressive target would make even strong, realistic
+  // play look merely "on pace" rather than good, since no real solver
+  // actually tracks that floor guess-by-guess. The extra guess of slack here
+  // is what lets a genuinely good opener still show above 100%, while
+  // leaving real headroom above that for the guess-2-to-10-candidates kind
+  // of result to read as clearly exceptional rather than barely-ahead.
+  const totalBitsNeeded = Math.log2(startSize);
+  const poolPaceTarget = Math.max(1, theoreticalMin + 2);
+  const poolPaceValues = steps.map((s, idx) => {
+    const guessNumber = idx + 1;
+    const paceFraction = Math.min(1, guessNumber / poolPaceTarget);
+    const targetCumBits = paceFraction * totalBitsNeeded;
+    if (targetCumBits <= 0) return 100; // guess 1 of a 1-guess target: no pace to compare against yet
+    return Math.min(200, (s.cumulativeBits / targetCumBits) * 100);
+  });
+  const poolReductionScore = poolPaceValues.reduce((a, b) => a + b, 0) / poolPaceValues.length;
+
+  const WEIGHTS = { quality: 0.35, speed: 0.25, luck: 0.15, poolReduction: 0.25 };
   const rawScore =
     WEIGHTS.quality * guessQualityScore +
     WEIGHTS.speed * speedEfficiencyScore +
-    WEIGHTS.luck * luckScore;
+    WEIGHTS.luck * luckScore +
+    WEIGHTS.poolReduction * poolReductionScore;
   const score = Math.max(0, Math.min(100, rawScore));
 
   // +/- is a within-band modifier: top third of the band earns a +,
@@ -861,6 +904,12 @@ function renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency, theo
       weight: WEIGHTS.speed,
     },
     {
+      label: "POOL REDUCTION",
+      detail: `avg ${poolReductionScore.toFixed(0)}% of the bits you "should" have by each guess number, given a ${poolPaceTarget}-guess realistic pace -- over 100% means you were ahead of pace`,
+      value: poolReductionScore,
+      weight: WEIGHTS.poolReduction,
+    },
+    {
       label: "PER-STEP LUCK FACTOR",
       detail: `mean actual ÷ expected bits across ${luckValues.length} guess${
         luckValues.length === 1 ? "" : "es"
@@ -885,9 +934,11 @@ function renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency, theo
 
   renderFormula(
     "gradeFormula",
-    `\\text{Score} = 0.45(${guessQualityScore.toFixed(0)}) + 0.35(${speedEfficiencyScore.toFixed(
+    `\\text{Score} = 0.35(${guessQualityScore.toFixed(0)}) + 0.25(${speedEfficiencyScore.toFixed(
       0
-    )}) + 0.20(${luckScore.toFixed(0)}) = ${score.toFixed(1)} \\Rightarrow \\text{${letter}}`,
+    )}) + 0.25(${poolReductionScore.toFixed(0)}) + 0.15(${luckScore.toFixed(
+      0
+    )}) = ${score.toFixed(1)} \\Rightarrow \\text{${letter}}`,
     true
   );
 }

@@ -45,6 +45,8 @@
 .nb-commonness-rare{background:#e3e2d8;color:#54564f}
 .nb-commonness-na{background:#e3e2d8;color:#8a8c84}
 .next-best-row .nb-bits{font:11px DM Mono,monospace;color:#3f6b4d;text-align:right;justify-self:end}
+.next-best-row .nb-pool{grid-column:1/-1;font:11px DM Mono,monospace;color:#54564f;margin:0}
+.next-best-row .nb-pool em{font-style:normal;color:#8a3a12}
 .next-best-row .nb-tag{grid-column:1/-1;font:600 9px DM Mono,monospace;letter-spacing:.06em;color:#3f6b4d}
 .next-best-row .nb-why{grid-column:1/-1;font-size:11px;line-height:1.55;color:#686a64;margin:2px 0 0}
 .next-best-mode-note{font-size:10px;line-height:1.6;color:#8a8c84;margin:10px 0 0;font-style:italic}
