@@ -64,11 +64,79 @@ function feedbackCode(guess, answer) {
   return (((c0 * 3 + c1) * 3 + c2) * 3 + c3) * 3 + c4;
 }
 
-// Shannon entropy (bits) of `guess` against the current candidate pool, plus the
-// Healy win-bonus correction (see guessPartitionProfile below for the derivation).
-// Returns {bits, pWin, adjustedBits} rather than a bare number, since ranking by
-// raw entropy alone is exactly the case that lets two guesses with identical bits
-// come out equally "good" even when one of them can win outright and the other can't.
+// Wordle Hard Mode requires every revealed green to stay fixed, every yellow
+// letter to be reused away from its known-wrong position, and every revealed
+// letter multiplicity to be preserved. It does *not* require a guess to
+// reproduce the whole previous feedback pattern: gray letters may be reused
+// and a legal probe can be outside the current answer candidate set.
+function buildHardModeConstraints(history) {
+  const fixedLetters = Array(5).fill("");
+  const forbiddenLetters = new Int32Array(5);
+  const minimumLetterCounts = new Int8Array(26);
+
+  for (const { guess, code } of history) {
+    const revealedThisGuess = new Int8Array(26);
+    let remainingCode = code;
+    const marks = new Int8Array(5);
+    for (let index = 4; index >= 0; index--) {
+      marks[index] = remainingCode % 3;
+      remainingCode = Math.floor(remainingCode / 3);
+    }
+
+    for (let index = 0; index < 5; index++) {
+      const letter = guess[index];
+      const letterIndex = letter.charCodeAt(0) - 65;
+
+      if (marks[index] === 2) {
+        fixedLetters[index] = letter;
+        revealedThisGuess[letterIndex]++;
+      } else if (marks[index] === 1) {
+        forbiddenLetters[index] |= 1 << letterIndex;
+        revealedThisGuess[letterIndex]++;
+      }
+    }
+
+    for (let letterIndex = 0; letterIndex < 26; letterIndex++) {
+      minimumLetterCounts[letterIndex] = Math.max(
+        minimumLetterCounts[letterIndex],
+        revealedThisGuess[letterIndex]
+      );
+    }
+  }
+
+  return { fixedLetters, forbiddenLetters, minimumLetterCounts };
+}
+
+function isHardModeLegal(word, constraints) {
+  if (!constraints) return true;
+
+  const { fixedLetters, forbiddenLetters, minimumLetterCounts } = constraints;
+
+  for (let index = 0; index < 5; index++) {
+    const letter = word[index];
+    const letterIndex = letter.charCodeAt(0) - 65;
+    if (fixedLetters[index] && fixedLetters[index] !== letter) return false;
+    if (forbiddenLetters[index] & (1 << letterIndex)) return false;
+  }
+
+  for (let letterIndex = 0; letterIndex < 26; letterIndex++) {
+    const requiredCount = minimumLetterCounts[letterIndex];
+    if (!requiredCount) continue;
+    let count = 0;
+    for (let index = 0; index < 5; index++) {
+      if (word.charCodeAt(index) - 65 === letterIndex) count++;
+    }
+    if (count < requiredCount) return false;
+  }
+
+  return true;
+}
+
+// Shannon entropy plus a candidate-reduction measure for `guess` against the
+// current pool. `candidateReductionBits` is collision entropy: it is the
+// information equivalent of the expected number of candidates left after the
+// feedback. The ranking gives equal weight to that direct reduction measure and
+// win-bonus-adjusted Shannon entropy.
 const _patternCounts = new Int32Array(243);
 
 function guessEntropy(guess, candidates) {
@@ -77,7 +145,9 @@ function guessEntropy(guess, candidates) {
   // so narrowing against true feedback stranded it at zero) has no
   // patterns to score. Return a neutral zero profile instead of falling
   // through to 0/0 divisions further down.
-  if (total === 0) return { bits: 0, pWin: 0, adjustedBits: 0 };
+  if (total === 0) {
+    return { bits: 0, pWin: 0, adjustedBits: 0, expectedRemaining: 0, candidateReductionBits: 0, rankingScore: 0 };
+  }
 
   _patternCounts.fill(0);
 
@@ -86,19 +156,32 @@ function guessEntropy(guess, candidates) {
   }
 
   let bits = 0;
+  let sumSquares = 0;
 
   for (let i = 0; i < 243; i++) {
     const count = _patternCounts[i];
     if (count === 0) continue;
     const p = count / total;
     bits -= p * Math.log2(p);
+    sumSquares += count * count;
   }
 
   // p_win: probability the guess IS the answer, i.e. the (at most one) candidate
   // that produces the all-green GGGGG pattern (code 242).
   const pWin = _patternCounts[WIN_CODE] / total;
 
-  return { bits, pWin, adjustedBits: bits + pWin };
+  const expectedRemaining = sumSquares / total;
+  const candidateReductionBits = Math.log2(total / expectedRemaining);
+  const adjustedBits = bits + pWin;
+
+  return {
+    bits,
+    pWin,
+    adjustedBits,
+    expectedRemaining,
+    candidateReductionBits,
+    rankingScore: (adjustedBits + candidateReductionBits) / 2,
+  };
 }
 
 // Full partition profile (entropy, bucket stats, KL divergence, win-bonus-adjusted
@@ -136,6 +219,8 @@ function guessPartitionProfile(guess, candidates) {
       bits: 0,
       pWin: 0,
       adjustedBits: 0,
+      candidateReductionBits: 0,
+      rankingScore: 0,
       bucketsUsed: 0,
       expectedRemaining: 0,
       maxBucket: 0,
@@ -179,12 +264,17 @@ function guessPartitionProfile(guess, candidates) {
 
   const pWin = _patternCounts[WIN_CODE] / N;
 
+  const expectedRemaining = sumSquares / N;
+  const adjustedBits = bits + pWin;
+
   return {
     bits,
     pWin,
-    adjustedBits: bits + pWin,
+    adjustedBits,
+    candidateReductionBits: Math.log2(N / expectedRemaining),
+    rankingScore: (adjustedBits + Math.log2(N / expectedRemaining)) / 2,
     bucketsUsed: k,
-    expectedRemaining: sumSquares / N,
+    expectedRemaining,
     maxBucket,
     mean,
     variance,
@@ -194,12 +284,10 @@ function guessPartitionProfile(guess, candidates) {
   };
 }
 
-// Top-N guesses by win-bonus-adjusted entropy (see guessPartitionProfile for the
-// derivation); fullDictionary widens the pool once candidates are small;
-// hardModeHistory restricts to Wordle Hard Mode. Ranking by adjustedBits rather
-// than raw bits means a guess that could win immediately is never just tied with
-// an equally-splitting guess that can't ever be the answer -- it's ranked ahead
-// of it, in proportion to how likely that immediate win actually is.
+// Top-N guesses by a balanced information score. It averages win-bonus-adjusted
+// Shannon entropy with collision entropy, which directly rewards a lower expected
+// candidate count. Full dictionary widens the pool once candidates are small;
+// hardModeHistory restricts to Wordle Hard Mode.
 function findBestGuesses(candidates, topN = 5, hardModeHistory = null, fullDictionary = null) {
   const useFullDictionary = candidates.length <= 500 && fullDictionary && fullDictionary.size > 0;
   const basePool = useFullDictionary
@@ -210,9 +298,8 @@ function findBestGuesses(candidates, topN = 5, hardModeHistory = null, fullDicti
   let hardModeApplied = false;
 
   if (hardModeHistory && hardModeHistory.length) {
-    const filtered = [...basePool].filter((word) =>
-      hardModeHistory.every((h) => feedbackCode(h.guess, word) === h.code)
-    );
+    const constraints = buildHardModeConstraints(hardModeHistory);
+    const filtered = [...basePool].filter((word) => isHardModeLegal(word, constraints));
     if (filtered.length > 0) {
       pool = new Set(filtered);
       hardModeApplied = true;
@@ -222,9 +309,14 @@ function findBestGuesses(candidates, topN = 5, hardModeHistory = null, fullDicti
   let best = [];
 
   for (const guess of pool) {
-    const { bits, pWin, adjustedBits } = guessEntropy(guess, candidates);
-    best.push({ word: guess, bits, pWin, adjustedBits });
-    best.sort((a, b) => b.adjustedBits - a.adjustedBits);
+    const profile = guessEntropy(guess, candidates);
+    best.push({ word: guess, ...profile });
+    best.sort(
+      (a, b) =>
+        b.rankingScore - a.rankingScore ||
+        b.adjustedBits - a.adjustedBits ||
+        a.expectedRemaining - b.expectedRemaining
+    );
     if (best.length > topN) best.pop();
   }
 

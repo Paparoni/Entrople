@@ -1,14 +1,14 @@
 # Entrople
-An entropy-driven Wordle solve analyzer, based on the rules of [Wordle](https://www.nytimes.com/games/wordle/index.html) by Josh Wardle. Enter an answer and a set of guesses, and Entrople scores the solve against a live word pool, narrows the real candidate space guess by guess, and shows the information-theory math behind the route, including the mathematically optimal route it would have taken itself.
+An entropy-driven Wordle solve analyzer, based on the rules of [Wordle](https://www.nytimes.com/games/wordle/index.html) by Josh Wardle. Enter an answer and a set of guesses, and Entrople scores the solve against a live word pool, narrows the real candidate space guess by guess, and shows the information-theory math behind the route, including the balanced-information route it would have taken itself.
 ### Author: Antwaun Tune (tuneantwaun@gmail.com)
 Try it out here: https://paparoni.github.io/Entrople/
 
 You can either:
 
 - Walk through a real (or hypothetical) game guess by guess, and see how each guess narrowed the candidate pool.
-- Compare your guesses against the entropy-optimal picks the bot would have made at each step.
+- Compare your guesses against the balanced-information picks the bot would have made at each step.
 - Watch Entrople solve today's real Wordle live, the moment it rolls over at midnight Eastern.
-- Run a **Deep Simulation**: fix an answer, fix a different opening word per game, and let Entrople's win-bonus-adjusted entropy search play out the rest. Batches of anywhere from a handful to thousands of games run in a background Web Worker and report a win rate, a guesses-to-solve distribution, and, most usefully, exactly which openers leave the entropy math short of a win inside six guesses. Large batches (especially against the full guess dictionary) are genuinely heavy client-side computation, so the tab warns up front and lets you cancel a run in progress.
+- Run a **Deep Simulation**: fix an answer, fix a different opening word per game, and let Entrople's balanced-information search play out the rest. Batches of anywhere from a handful to thousands of games run in a background Web Worker and report a win rate, a guesses-to-solve distribution, and exactly which openers leave the search short of a win inside six guesses. Large batches (especially against the full guess dictionary) are genuinely heavy client-side computation, so the tab warns up front and lets you cancel a run in progress.
 
 
 # Word data
@@ -47,13 +47,21 @@ A guess that splits the candidate pool into many small, evenly-sized buckets car
 - **Bucket statistics**: the largest bucket, and the mean, variance, and standard deviation across all buckets, to show how evenly a guess splits the pool.
 - **KL divergence**: how far the guess's actual pattern distribution is from a perfectly uniform distribution over all 243 patterns, as another lens on how efficient a guess is.
 
-At each step of a solve, Entrople finds the top-entropy guesses either from the narrowed candidate pool, or, once the pool is small enough, from the full guess dictionary, since a non-candidate word can sometimes split a small pool more evenly than any remaining candidate. Guesses are then re-ranked against this profile to show how the actual guess made in the game compares to the guess Entrople itself would have picked.
+At each step of a solve, Entrople searches either the narrowed candidate pool or, once the pool is small enough, the full guess dictionary. It ranks legal guesses by a balanced information score: an equal blend of win-adjusted Shannon entropy and candidate-reduction information, `log₂(N / E[N′])`. The second term favors guesses that leave fewer candidates on average, while the first favors evenly informative feedback partitions.
 
 **Win-bonus correction.** Raw Shannon entropy alone has a blind spot: it scores a guess purely by how evenly it splits the candidate pool, so a guess that can never be the answer can tie exactly with a guess that could win outright this turn, as long as both split the pool the same way. Following Alex Healy's analysis (see Math citations below), Entrople corrects for this by adding a small bonus to a guess's entropy equal to the probability that the guess itself is the hidden answer:
 
     adjustedBits = bits + p_win,   p_win = Pr(guess is the answer)
 
-p_win is nonzero only when the guess is itself still a live candidate (it's the fraction of the pool, 1/N, that the guess's own all-green GGGGG bucket represents). This falls directly out of Healy's derivation: he shows that assigning the all-green outcome a value of -1 bit, instead of the 0 a same-sized bucket would otherwise contribute, is algebraically equivalent to adding p_win to the guess's ordinary entropy. Entrople's best-guess search, its top-5 rankings, and its own auto-solve all rank guesses by this adjusted score rather than raw entropy, so a guess that could win immediately is never just tied with one that only narrows the field.
+p_win is nonzero only when the guess is itself still a live candidate (it's the fraction of the pool, 1/N, that the guess's own all-green GGGGG bucket represents). This falls directly out of Healy's derivation: he shows that assigning the all-green outcome a value of -1 bit, instead of the 0 a same-sized bucket would otherwise contribute, is algebraically equivalent to adding p_win to the guess's ordinary entropy. Entrople combines that adjusted entropy with candidate-reduction information for its Top 5 rankings and auto-solve, so an immediate win and a lower expected posterior pool both count.
+
+## Verification
+
+Run the core feedback, Hard Mode, and ranking checks with:
+
+```sh
+node tests/core.test.js
+```
 
 # Math citations
 [Claude Shannon](https://en.wikipedia.org/wiki/Claude_Shannon) - author of ["A Mathematical Theory of Communication"](https://people.math.harvard.edu/~ctm/home/text/others/shannon/entropy/entropy.pdf), the source of the entropy formula used throughout

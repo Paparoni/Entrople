@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Entrople: The Entropy-Driven Wordle Analyzer</title>
-  <meta name="description" content="Entrople turns a Wordle solve into a real entropy breakdown: live candidate narrowing, expected information per guess, and the mathematically optimal route.">
+  <meta name="description" content="Entrople turns a Wordle solve into a real entropy breakdown: live candidate narrowing, expected information per guess, and a balanced-information route.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23171a16'/%3E%3Crect x='4' y='4' width='10' height='10' fill='%234f7d5b'/%3E%3Crect x='18' y='4' width='10' height='10' fill='%23c39a3d'/%3E%3Crect x='4' y='18' width='10' height='10' fill='%23c39a3d'/%3E%3Crect x='18' y='18' width='10' height='10' fill='%234f7d5b'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -98,8 +98,8 @@
           <p class="deep-intro">For each guess: how many real answers were still possible before and after, the actual bits of information gained, the entropy that guess was <em>expected</em> to yield against the live candidate pool, the shape of the resulting partition, and the strongest guess Entrople could find for that step.</p>
 
           <div class="mode-toggle" role="group" aria-label="Best-guess search mode">
-            <button type="button" class="mode-btn active" data-mode="hard" id="modeHard" title="Hard Mode (default): best guess suggestions must satisfy every green, yellow, and gray clue revealed by prior guesses, the same rule Wordle's own Hard Mode enforces.">HARD MODE</button>
-            <button type="button" class="mode-btn" data-mode="easy" id="modeEasy" title="Normal Mode: best guess suggestions ignore prior clues and always show the single highest entropy word in the whole dictionary, matching Wordle's default, non Hard, mode.">EASY MODE</button>
+            <button type="button" class="mode-btn active" data-mode="hard" id="modeHard" title="Hard Mode (default): suggestions preserve green positions, reuse every yellow letter away from its known-wrong position, and retain revealed duplicate-letter counts. Gray letters remain legal probes, as in Wordle Hard Mode.">HARD MODE</button>
+            <button type="button" class="mode-btn" data-mode="easy" id="modeEasy" title="Normal Mode: suggestions may ignore prior revealed hints. Entrople searches the candidate pool first, then broadens to the full legal dictionary once the pool is small.">EASY MODE</button>
           </div>
 
           <div class="formula-ref" id="formulaRef">
@@ -109,10 +109,11 @@
               <div class="formula-item"><span>Shannon entropy of a guess</span><div id="fEntropy"></div></div>
               <div class="formula-item"><span>Actual information gained</span><div id="fActual"></div></div>
               <div class="formula-item"><span>Expected candidates remaining</span><div id="fExpectedRemain"></div></div>
+              <div class="formula-item"><span>Candidate-reduction information</span><div id="fCandidateReduction"></div></div>
               <div class="formula-item"><span>Partition variance / std. dev.</span><div id="fVariance"></div></div>
               <div class="formula-item"><span>KL divergence vs. uniform split</span><div id="fKL"></div></div>
               <div class="formula-item"><span>Information-theoretic minimum</span><div id="fMinGuesses"></div></div>
-              <div class="formula-item"><span>Win-bonus adjusted score (best-guess ranking)</span><div id="fWinBonus"></div></div>
+              <div class="formula-item"><span>Balanced best-guess score</span><div id="fWinBonus"></div></div>
             </div>
             <p class="references-title">REFERENCES</p>
             <ol class="references">
@@ -129,7 +130,7 @@
 
         <article class="math-card grade-card" id="gradeCard">
           <div class="math-title"><p>FINAL GRADE</p><span>COMPOSITE SCORE</span></div>
-          <p class="deep-intro">A single score built from everything above: how much information you actually captured relative to the theoretical ceiling, how efficiently each guess performed against its own entropy, how evenly your guesses split the candidate space, and how many guesses you had to spare.</p>
+          <p class="deep-intro">A mathematical score built from conditional information efficiency, expected posterior reduction, posterior resolution, and guess-count efficiency. The opener establishes the information state but is not graded. Favorable feedback is shown in the analysis, but never raises the grade; the final correct entry is completion, not a strategic decision.</p>
           <div class="grade-display">
             <div class="grade-letter" id="gradeLetter">-</div>
             <div class="grade-meta">
@@ -147,8 +148,8 @@
         </article>
 
         <article class="math-card solve-card" id="solveCard">
-          <div class="math-title"><p>HOW ENTROPLE WOULD SOLVE</p><span>WIN-BONUS ADJUSTED ROUTE</span></div>
-          <p class="deep-intro">Set your actual guesses aside. This is the route Entrople's own win-bonus-adjusted entropy search takes on its own: every guess is whichever legal word carries the single highest <em>adjusted</em>-information score against the live candidate pool — raw Shannon entropy plus a small bonus for the chance the guess itself is the answer (see the win-bonus correction below) — narrowed guess by guess by the real feedback this answer produces. It is not plain entropy maximization: a guess that could win outright this turn is always favored over one that only splits the pool the same way without being able to win.</p>
+          <div class="math-title"><p>HOW ENTROPLE WOULD SOLVE</p><span>BALANCED INFORMATION ROUTE</span></div>
+          <p class="deep-intro">Set your actual guesses aside. This is the route Entrople's balanced information search takes on its own: every guess maximizes an equal blend of win-bonus-adjusted Shannon entropy and expected candidate reduction, narrowed guess by guess by the real feedback this answer produces.</p>
           <div id="solveBoard" class="solve-board" aria-label="Entrople's own solve, animated"></div>
           <div id="solveSteps" class="solve-steps"></div>
           <p id="solveSummary" class="solve-summary"></p>
@@ -168,7 +169,7 @@
       <section class="intro">
         <p class="eyebrow">SOLVE ANALYZER / LIVE</p>
         <h1>Entrople solves<br><span>today's Wordle.</span></h1>
-        <p class="lede">No human guesses here. Entrople pulls today's answer straight from the NYT Wordle API the moment the puzzle rolls over at midnight Eastern Time, then solves it live with its own win-bonus-adjusted entropy search, guess by guess, with the full math behind every pick.</p>
+        <p class="lede">No human guesses here. Entrople pulls today's answer straight from the NYT Wordle API the moment the puzzle rolls over at midnight Eastern Time, then solves it live with its balanced information search, guess by guess, with the full math behind every pick.</p>
       </section>
 
       <section class="results today-results" aria-label="Entrople's live solve of today's Wordle">
@@ -198,8 +199,8 @@
 
           <div class="spoiler-content" id="todaySpoilerContent">
             <article class="math-card solve-card" id="todaySolveCard">
-              <div class="math-title"><p>HOW ENTROPLE SOLVED IT</p><span>WIN-BONUS ADJUSTED ROUTE</span></div>
-              <p class="deep-intro">This is the exact route Entrople's own win-bonus-adjusted entropy search took, completely unassisted: every guess is whichever legal word carried the single highest adjusted-information score (raw Shannon entropy plus a bonus for the chance the guess itself is the answer) against the live candidate pool, narrowed guess by guess by the real feedback today's answer produces.</p>
+              <div class="math-title"><p>HOW ENTROPLE SOLVED IT</p><span>BALANCED INFORMATION ROUTE</span></div>
+              <p class="deep-intro">This is the exact route Entrople's balanced information search took, completely unassisted: every guess maximizes an equal blend of win-bonus-adjusted entropy and expected candidate reduction against the live candidate pool.</p>
               <div id="todaySolveBoard" class="solve-board" aria-label="Entrople's live solve of today's Wordle, animated"></div>
               <div id="todaySolveSteps" class="solve-steps"></div>
               <p id="todaySolveSummary" class="solve-summary"></p>
@@ -214,7 +215,7 @@
 
             <article class="math-card deep-card" id="todayDeepCard">
               <div class="math-title"><p>THE MATH</p><span>GUESS-BY-GUESS BREAKDOWN</span></div>
-              <p class="deep-intro">For each guess Entrople made: the live candidate pool before and after, the raw Shannon entropy and win-bonus-adjusted score that earned this word the pick, the actual bits of information the real feedback delivered, and the shape of the resulting split across all 3⁵ = 243 possible feedback patterns.</p>
+              <p class="deep-intro">For each guess Entrople made: the live candidate pool before and after, entropy, expected candidate reduction, the balanced score that earned the pick, and the shape of the resulting split across all 3⁵ = 243 possible feedback patterns.</p>
               <div id="todayDeepBody"></div>
             </article>
           </div>
@@ -226,7 +227,7 @@
       <section class="intro">
         <p class="eyebrow">SOLVE ANALYZER / DEEP SIMULATION</p>
         <h1>How many ways<br><span>can Entrople win?</span></h1>
-        <p class="lede">Pick an answer. Entrople fixes a different opening word for each simulated game, then takes over with its own win-bonus-adjusted entropy search for every guess after that, and reports how many of those games it wins inside six guesses, and where the entropy math runs out of room.</p>
+        <p class="lede">Pick an answer. Entrople fixes a different opening word for each simulated game, then takes over with its balanced information search for every guess after that, and reports how many of those games it wins inside six guesses.</p>
       </section>
 
       <section class="workspace" aria-label="Deep simulation">
@@ -256,8 +257,8 @@
           <p class="hint" id="simSampleHint">Randomly sampled from the pool above, without repeats.</p>
 
           <div class="mode-toggle" role="group" aria-label="Continuation mode">
-            <button type="button" class="mode-btn active" data-simmode="hard" id="simModeHard" title="After the fixed opener, every later guess must satisfy all prior clues, matching Wordle's Hard Mode.">HARD MODE</button>
-            <button type="button" class="mode-btn" data-simmode="easy" id="simModeEasy" title="After the fixed opener, every later guess ignores prior clues and always takes the single highest entropy word in the dictionary.">EASY MODE</button>
+            <button type="button" class="mode-btn active" data-simmode="hard" id="simModeHard" title="After the fixed opener, every later guess preserves green positions, yellow-letter placement constraints, and revealed duplicate-letter counts.">HARD MODE</button>
+            <button type="button" class="mode-btn" data-simmode="easy" id="simModeEasy" title="After the fixed opener, later guesses may ignore prior revealed hints. Entrople broadens to the full legal dictionary once the pool is small.">EASY MODE</button>
           </div>
 
           <p class="hint" id="simEstimate"></p>
@@ -329,13 +330,13 @@
 
             <article class="math-card hidden" id="simFailCard">
               <div class="math-title"><p>WHERE THE ENTROPY MATH FAILED</p><span>NO WIN INSIDE 6 GUESSES</span></div>
-              <p class="deep-intro">These openers left the win-bonus-adjusted entropy search a candidate pool it couldn't cut down to one word within six guesses. Tap any of them for the full guess-by-guess route.</p>
+              <p class="deep-intro">These openers left the balanced information search a candidate pool it couldn't cut down to one word within six guesses. Tap any of them for the full guess-by-guess route.</p>
               <div id="simFailList" class="sim-opener-list"></div>
             </article>
 
             <article class="math-card">
               <div class="math-title"><p>LONGEST THINKING</p><span>SLOWEST OPENERS TO COMPUTE</span></div>
-              <p class="deep-intro" id="simSlowestIntro">Per-game compute time for the win-bonus-adjusted search, timed individually rather than just averaged across the whole batch. A slow game usually means a large, slow-narrowing candidate pool somewhere along its route, not necessarily a failed one.</p>
+              <p class="deep-intro" id="simSlowestIntro">Per-game compute time for the balanced-information search, timed individually rather than just averaged across the whole batch. A slow game usually means a large, slow-narrowing candidate pool somewhere along its route, not necessarily a failed one.</p>
               <div id="simSlowest" class="sim-opener-list"></div>
             </article>
 

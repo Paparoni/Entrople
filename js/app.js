@@ -35,6 +35,17 @@ const CORS_PROXIES = [
   (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
   (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
 ];
+const FETCH_TIMEOUT_MS = 12000;
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // "en-CA" formats as YYYY-MM-DD, which is exactly what the NYT endpoint expects.
 function todaysEasternDate() {
@@ -51,7 +62,7 @@ function todaysEasternDate() {
 // fall through to the live-fetch attempts below.
 async function fetchFromLocalArchive(dateStr) {
   try {
-    const res = await fetch(LOCAL_ARCHIVE_URL, { cache: "no-store" });
+    const res = await fetchWithTimeout(LOCAL_ARCHIVE_URL, { cache: "no-store" });
     if (!res.ok) return null;
     const archive = await res.json();
     const entry = archive?.[dateStr];
@@ -71,30 +82,25 @@ async function fetchTodaysWordle(dateStr) {
   // CORS on every browser, every time (see the comment on WORDLE_API above),
   // so trying it first only adds a guaranteed-failing round trip before
   // falling through to the proxies that can actually succeed.
-  const attempts = CORS_PROXIES.map((make) => make(url));
-  let lastErr;
-
-  for (const attemptUrl of attempts) {
-    try {
-      const res = await fetch(attemptUrl, { cache: "no-store" });
+  try {
+    return await Promise.any(
+      CORS_PROXIES.map(async (make) => {
+        const res = await fetchWithTimeout(make(url), { cache: "no-store" });
       if (!res.ok) throw new Error(`NYT Wordle API responded ${res.status}`);
       const data = await res.json();
       if (!data || typeof data.solution !== "string") {
         throw new Error("Unexpected response shape from NYT Wordle API");
       }
       return data;
-    } catch (err) {
-      lastErr = err;
-    }
+      })
+    );
+  } catch (err) {
+    const causes = err instanceof AggregateError ? err.errors : [err];
+    throw causes[causes.length - 1] || new Error("Could not reach the NYT Wordle API");
   }
-
-  throw (
-    lastErr ||
-    new Error(
-      "Could not reach the NYT Wordle API, and today's date isn't in the local archive yet"
-    )
-  );
 }
+
+const formulaRetryCounts = new Map();
 
 function renderFormula(id, tex, displayMode = false) {
   const el = document.querySelector(`#${id}`);
@@ -102,10 +108,17 @@ function renderFormula(id, tex, displayMode = false) {
 
   if (typeof katex === "undefined") {
     el.textContent = tex;
-    setTimeout(() => renderFormula(id, tex, displayMode), 150);
+    const retries = formulaRetryCounts.get(id) || 0;
+    // The CDN can finish after app.js, but a blocked CDN must not leave a
+    // permanent 150 ms retry loop running for every formula on the page.
+    if (retries < 20) {
+      formulaRetryCounts.set(id, retries + 1);
+      setTimeout(() => renderFormula(id, tex, displayMode), 150);
+    }
     return;
   }
 
+  formulaRetryCounts.delete(id);
   try {
     katex.render(tex, el, { throwOnError: false, displayMode });
   } catch {
@@ -170,7 +183,7 @@ async function loadWordData() {
 }
 
 async function fetchText(url) {
-  const res = await fetch(url);
+  const res = await fetchWithTimeout(url);
   if (!res.ok) throw new Error(`${url} responded ${res.status}`);
   return res.text();
 }
@@ -200,11 +213,19 @@ const guessList = document.querySelector("#guessList");
 const form = document.querySelector("#analyzerForm");
 
 let guesses = ["ADIEU", "SHORT", "BROTH"];
+let analyzerRevision = 0;
+let definitionRevision = 0;
 
 // "hard" restricts suggestions to Wordle Hard Mode rules; "easy" ignores prior clues.
 let solveMode = "hard";
 
 const clean = (value) => value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 5);
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>'"]/g, (char) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]
+  );
+}
 
 function renderInputs() {
   guessList.innerHTML = "";
@@ -302,6 +323,7 @@ function englishCommonnessTier(word) {
 }
 
 function analyze() {
+  const revision = ++analyzerRevision;
   const answer = clean(answerEl.value);
   const validGuesses = guesses.map(clean).filter(Boolean);
   const error = document.querySelector("#error");
@@ -430,11 +452,11 @@ function analyze() {
     route.appendChild(routeLine);
   });
 
-  renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed);
+  renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed, revision);
 
-  renderDefinition(answer);
+  renderDefinition(answer, revision);
 
-  renderEntropleSolve(answer, { solvedAt, guessesUsed });
+  renderEntropleSolve(answer, { solvedAt, guessesUsed }, revision);
 
   const summaryTitle = solvedAt
     ? `An ${solvedAt <= 3 ? "efficient" : "eventful"} ${ordinal(solvedAt)}-guess solve.`
@@ -458,7 +480,7 @@ function analyze() {
   document.querySelector("#results").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
+function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed, revision) {
   const deepCard = document.querySelector("#deepCard");
   const deepBody = document.querySelector("#deepBody");
 
@@ -484,7 +506,9 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
 
   // Defer a tick so the "crunching" state paints before the synchronous search.
   setTimeout(() => {
-    let candidates = words.answers;
+    if (revision !== analyzerRevision) return;
+
+    let candidates = seedCandidatePool(words.answers, answer, words.guesses);
     const startSize = candidates.length;
     let totalBits = 0;
     const steps = [];
@@ -561,6 +585,7 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
           : `Not in the top ${step.best.top.length} searched.`;
 
       const bestGuess = step.best.top[0];
+      const bestProfile = guessPartitionProfile(bestGuess.word, step.beforeCandidates);
       const efficiency =
         step.expected > 0 ? Math.min(100, (step.actualBits / step.expected) * 100) : 100;
 
@@ -616,14 +641,14 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
         <p class="deep-formula" id="${formulaId}-win"></p>
         <p class="deep-note">
           Best guess found for this step (searched ${step.best.hardModeApplied ? `${step.best.poolSize.toLocaleString()} legal words` : step.best.searched}):
-          <b>${bestGuess.word}</b> at ${fmtBits(bestGuess.bits)} raw entropy${
+          <b>${bestGuess.word}</b> at ${fmtBits(bestGuess.rankingScore)} balanced score (${fmtBits(bestGuess.bits)} entropy; expected ${bestGuess.expectedRemaining.toFixed(1)} candidates left)${
         bestGuess.pWin > 0
           ? `, win-bonus adjusted to ${fmtBits(bestGuess.adjustedBits)} (${(bestGuess.pWin * 100).toFixed(1)}% chance this guess IS the answer)`
           : " (not itself a possible answer, so no win-bonus applies)"
       }. ${rankLabel}
-          The largest single bucket this guess could have landed in held ${p.maxBucket.toLocaleString()}
-          candidates (mean bucket size across the ${p.bucketsUsed} realized patterns was
-          ${p.mean.toFixed(1)}).
+          Its largest single bucket holds ${bestProfile.maxBucket.toLocaleString()}
+          candidates (mean bucket size across ${bestProfile.bucketsUsed} realized patterns is
+          ${bestProfile.mean.toFixed(1)}).
         </p>
         <div class="next-best">
           <p class="next-best-title">TOP ${step.best.top.length} GUESSES FOR THIS STEP</p>
@@ -632,9 +657,9 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
               .map((cand, ci) => {
                 const isPlayed = cand.word === step.guess;
                 const candProfile = guessPartitionProfile(cand.word, step.beforeCandidates);
-                const topProfile = guessPartitionProfile(step.best.top[0].word, step.beforeCandidates);
+                const topProfile = bestProfile;
                 const gapFromTop =
-                  ci === 0 ? 0 : step.best.top[0].adjustedBits - cand.adjustedBits;
+                  ci === 0 ? 0 : step.best.top[0].rankingScore - cand.rankingScore;
                 const commonness = englishCommonnessTier(cand.word);
                 const priorLetters = evaluatedGuesses.slice(0, i).join("");
                 const candVowels = vowelsIn(cand.word);
@@ -653,9 +678,9 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
                     : "";
                 let why;
                 if (ci === 0) {
-                  why = `Highest win-bonus-adjusted score of the ${step.best.hardModeApplied ? `${step.best.poolSize.toLocaleString()} legal words` : `${step.best.searched} searched`} (raw entropy ${fmtBits(candProfile.bits)}${cand.pWin > 0 ? `, adjusted ${fmtBits(candProfile.adjustedBits)}` : ""}). Spreads the ${step.before.toLocaleString()} candidates across ${candProfile.bucketsUsed} distinct outcomes, worst case leaving ${candProfile.maxBucket.toLocaleString()} words (${((candProfile.maxBucket / step.before) * 100).toFixed(1)}%) if the unluckiest pattern lands. Vowel-wise, it ${vowelNote}; with only 5 vowels in English against 21 consonants, that coverage is part of why the entropy math likes it.${winNote}`;
+                  why = `Highest balanced score of the ${step.best.hardModeApplied ? `${step.best.poolSize.toLocaleString()} legal words` : `${step.best.searched} searched`}: ${fmtBits(candProfile.adjustedBits)} win-adjusted entropy and ${fmtBits(candProfile.candidateReductionBits)} candidate-reduction information, leaving ${candProfile.expectedRemaining.toFixed(1)} candidates on average. Its worst case is ${candProfile.maxBucket.toLocaleString()} words (${((candProfile.maxBucket / step.before) * 100).toFixed(1)}%). Vowel-wise, it ${vowelNote}.${winNote}`;
                 } else {
-                  why = `${fmtBits(gapFromTop)} behind the top pick on win-bonus-adjusted score. Splits into ${candProfile.bucketsUsed} outcomes with a worst case of ${candProfile.maxBucket.toLocaleString()} words (${((candProfile.maxBucket / step.before) * 100).toFixed(1)}%), ${
+                  why = `${fmtBits(gapFromTop)} behind the top balanced score. It leaves ${candProfile.expectedRemaining.toFixed(1)} candidates on average (worst case ${candProfile.maxBucket.toLocaleString()}), and splits into ${candProfile.bucketsUsed} outcomes, ${
                     candProfile.bucketsUsed >= topProfile.bucketsUsed
                       ? "about as even a split as the top pick"
                       : "a somewhat less even split than the top pick"
@@ -666,7 +691,7 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
                     <span class="nb-rank">#${ci + 1}</span>
                     <b class="nb-word">${cand.word}</b>
                     <span class="nb-commonness nb-commonness-${commonness.tier}" title="How commonly this word is used in everyday English, not how likely it is to be the Wordle answer">${commonness.label}</span>
-                    <span class="nb-bits" title="${cand.pWin > 0 ? `raw entropy ${cand.bits.toFixed(3)} + win-bonus ${cand.pWin.toFixed(3)}` : "raw entropy (no win-bonus: not a live candidate)"}">${fmtBits(cand.adjustedBits)}</span>
+                    <span class="nb-bits" title="R = average of win-adjusted entropy and candidate-reduction information">R ${fmtBits(cand.rankingScore)}</span>
                     <span class="nb-pool" title="Average remaining candidates across all 243 possible feedback patterns, and the worst case if the unluckiest pattern lands">${step.before.toLocaleString()} → ~${candProfile.expectedRemaining.toFixed(1)} avg <em>(worst ${candProfile.maxBucket.toLocaleString()})</em></span>
                     ${isPlayed ? '<span class="nb-tag">you played this</span>' : ""}
                     <p class="nb-why">${why}</p>
@@ -674,7 +699,7 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
               })
               .join("")}
           </div>
-          <p class="next-best-mode-note">The ranking is Shannon entropy plus a win-bonus correction (Healy, 2022): a guess that could itself be the answer gets +p<sub>win</sub> bits added on top of its raw entropy, since winning outright beats merely narrowing the field to the same size without winning. This is what breaks the old tie between two guesses carrying identical bits: the one that's a live candidate now outranks the one that isn't. It still doesn't weight a word by anything beyond that specific correction, so among words that are equally live candidates (or equally not), the ranking is unchanged. The pool-size line under each word (average and worst-case remaining candidates) is the same entropy number expressed as candidate counts instead of bits, since "leaves ~4 words on average, worst case 9" is often easier to feel than "1.4 bits" -- they're the same underlying quantity, not a second score. The commonness badge and vowel note per word above are tidbits, not separate scoring terms: the badge reflects how often the word is used in everyday English globally (Google Books Ngram data), not Wordle-answer likelihood. Vowel coverage is already fully priced into the entropy number itself (see the citations in the formula reference above), so an explicit vowel bonus on top would just double-count it.</p>
+          <p class="next-best-mode-note">The ranking balances two information-theory measures equally: win-bonus-adjusted Shannon entropy (how broadly the feedback splits the pool) and candidate-reduction information, log<sub>2</sub>(N / E[N′]) (how few candidates the feedback leaves on average). A possible-answer guess still receives the Healy win bonus, so a chance to solve immediately counts. The pool line shows the direct result of that second measure: lower average and worst-case counts are better. Commonness and vowel notes are explanatory only, not extra score terms.</p>
         </div>
       `;
 
@@ -748,101 +773,87 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed) {
       true
     );
 
-    renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency, theoreticalMin, startSize);
+    if (answerMissingFromPool) {
+      const gradeCard = document.querySelector("#gradeCard");
+      gradeCard.classList.add("disabled");
+      document.querySelector("#gradeBreakdown").innerHTML = "";
+      document.querySelector("#gradeLetter").textContent = "-";
+      document.querySelector("#gradeScore").textContent = "0";
+      document.querySelector("#gradeVerdict").textContent =
+        "Grading is unavailable because the answer is not in Entrople's legal word dictionary.";
+    } else {
+      renderGrade(steps, solvedAt, guessesUsed, theoreticalMin);
+    }
     renderTraps(steps, solvedAt);
   }, 20);
 }
 
-// Composite 0-100 score: guess quality (35%), solve speed (25%), pool-reduction pace (25%), per-step luck (15%).
-//
-// Why not grade against the raw 7.92-bit (log2 243) ceiling or dock a flat
-// 12 points per guess used? Both treat an unreachable ideal as the baseline.
-// No real guess ever splits 243 ways evenly against a live answer list, so
-// scoring "avg bits / 7.92" or penalizing every guess past guess 1 the same
-// amount fails good play: it grades you against a solver that doesn't exist
-// rather than against the best move actually available at each step.
-// Instead:
-//   - Guess quality asks "how good was the word you picked, relative to the
-//     best word Entrople could find for that exact step" (win-bonus-adjusted
-//     entropy ratio). That's the real skill signal.
-//   - Solve speed compares your guess count to a realistic target
-//     (the information-theoretic minimum, plus one extra guess of slack --
-//     since no real opening word partitions perfectly), not to "1 guess."
-//   - Pool reduction asks a blunter, guess-number-relative question: is the
-//     candidate pool where a solidly-played game should have it by now,
-//     given the guess number you're on? It paces against a slightly more
-//     forgiving target (theoreticalMin + 2) than Speed's own target, since
-//     pacing every guess along the way against Speed's more aggressive
-//     theoreticalMin + 1 would make even strong, realistic play look merely
-//     "on pace" rather than good. Reducing the pool far ahead of that pace
-//     (e.g. down to ~10 candidates by guess 2) scores above 100% here,
-//     uncapped up to 200%, so an outsized reduction reads as outsized.
-//   - Luck factor (already computed elsewhere) captures how the dice fell
-//     independent of whether the guess itself was sound.
-function renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency, theoreticalMin, startSize) {
+// Composite 0-100 score: informed follow-up decisions (35%), expected pool
+// reduction after the opener (20%), endgame conversion (5%), and solve speed
+// (40%). The opener establishes the information state but is not graded;
+// subsequent guesses are judged against the exact candidate pool it creates.
+// Feedback is partly luck, so expected reduction is used rather than the
+// fortunate reduction that happened on this particular answer.
+// The final all-green guess is also excluded from both decision metrics: once
+// a word is forced, entering it is completion rather than a strategic choice.
+function renderGrade(steps, solvedAt, guessesUsed, theoreticalMin) {
   const card = document.querySelector("#gradeCard");
   card.classList.remove("disabled");
 
-  const luckValues = steps.map((s) =>
-    s.expected > 0 ? Math.min(100, (s.actualBits / s.expected) * 100) : 100
-  );
-  const luckScore = luckValues.reduce((a, b) => a + b, 0) / luckValues.length;
-
-  // How good was each guess, relative to the best word available for that
-  // exact step (both scored win-bonus-adjusted, so a guess that could win
-  // outright is compared fairly against other guesses that could too).
-  const qualityValues = steps.map((s) => {
-    const bestBits = s.best?.top?.[0]?.adjustedBits ?? s.profile.adjustedBits;
+  const decisionSteps = solvedAt ? steps.slice(0, -1) : steps;
+  const qualityFor = (s) => {
+    const bestBits = s.best?.top?.[0]?.rankingScore ?? s.profile.rankingScore;
     if (bestBits <= 0) return 100; // only one legal word left to try
-    return Math.min(100, (s.profile.adjustedBits / bestBits) * 100);
-  });
-  const guessQualityScore = qualityValues.reduce((a, b) => a + b, 0) / qualityValues.length;
+    return Math.min(100, (s.profile.rankingScore / bestBits) * 100);
+  };
+  const informedSteps = decisionSteps.slice(1);
+  const followupQualityScore = informedSteps.length
+    ? informedSteps.reduce((sum, step) => sum + qualityFor(step), 0) / informedSteps.length
+    : 100;
 
-  // A realistic target: the information-theoretic floor, plus one guess of
-  // slack, since perfectly even 243-way splits don't occur against a real
-  // answer list. Full marks at or under that target; -15 per guess beyond it.
+  // Pool reduction is graded at the moment each choice was made. Collision
+  // entropy is log2(N / E[N']), so it measures the expected shrinkage in the
+  // candidate pool. Weighting by log2(N) gives earlier decisions more impact:
+  // a strong opener that meaningfully cuts a 2,315-word pool matters more than
+  // an equally good split after only two candidates remain.
+  const reductionValues = informedSteps.map((s) => {
+    const bestReduction = s.best?.top?.[0]?.candidateReductionBits ?? s.profile.candidateReductionBits;
+    if (bestReduction <= 0) return { score: 100, weight: 1 };
+    return {
+      score: Math.min(100, (s.profile.candidateReductionBits / bestReduction) * 100),
+      weight: Math.max(1, Math.log2(Math.max(2, s.before))),
+    };
+  });
+  const reductionWeight = reductionValues.reduce((sum, item) => sum + item.weight, 0);
+  const poolReductionScore = reductionWeight
+    ? reductionValues.reduce((sum, item) => sum + item.score * item.weight, 0) / reductionWeight
+    : 100;
+
+  // Once the candidate set is small, the player should convert that position
+  // promptly. This intentionally measures turns, not the realized feedback
+  // bucket: it only starts after the pool has already reached 10 or fewer.
+  const endgameStart = steps.findIndex((s) => s.before <= 10);
+  const guessesToClose = endgameStart >= 0 ? steps.length - endgameStart : null;
+  const endgameConversionScore = !solvedAt
+    ? 0
+    : guessesToClose === null
+    ? 100
+    : Math.max(0, 100 - Math.max(0, guessesToClose - 1) * 40);
+
+  // A realistic target is the information-theoretic floor plus one guess of
+  // slack. Every guess beyond that costs 35 points: being two guesses late
+  // should not be redeemed by a fortunate feedback pattern.
   const speedTarget = Math.max(1, theoreticalMin + 1);
   const speedEfficiencyScore = solvedAt
-    ? Math.max(0, 100 - Math.max(0, solvedAt - speedTarget) * 15)
+    ? Math.max(0, 100 - Math.max(0, solvedAt - speedTarget) * 35)
     : 0;
 
-  // How much did each guess actually shrink the candidate pool, *for the
-  // guess number it was played on* -- distinct from Luck Factor above, which
-  // only asks "did this specific guess beat its own entropy expectation."
-  // This asks a blunter question: given you're on guess N, is the candidate
-  // pool where a solidly-played game "should" have it by now? A guess that
-  // collapses the pool far ahead of that pace (e.g. down to ~10 candidates
-  // by guess 2) scores well above 100% here, uncapped up to 200%, so an
-  // outsized reduction actually shows up as outsized rather than getting
-  // quietly averaged away.
-  //
-  // This paces against theoreticalMin + 2, not the Speed score's own
-  // theoreticalMin + 1 (speedTarget). Speed grades your *final* guess count
-  // against an aggressive, near-best-case target -- fair, since it only has
-  // to be hit once, at the end. Pacing *every single guess along the way*
-  // against that same aggressive target would make even strong, realistic
-  // play look merely "on pace" rather than good, since no real solver
-  // actually tracks that floor guess-by-guess. The extra guess of slack here
-  // is what lets a genuinely good opener still show above 100%, while
-  // leaving real headroom above that for the guess-2-to-10-candidates kind
-  // of result to read as clearly exceptional rather than barely-ahead.
-  const totalBitsNeeded = Math.log2(startSize);
-  const poolPaceTarget = Math.max(1, theoreticalMin + 2);
-  const poolPaceValues = steps.map((s, idx) => {
-    const guessNumber = idx + 1;
-    const paceFraction = Math.min(1, guessNumber / poolPaceTarget);
-    const targetCumBits = paceFraction * totalBitsNeeded;
-    if (targetCumBits <= 0) return 100; // guess 1 of a 1-guess target: no pace to compare against yet
-    return Math.min(200, (s.cumulativeBits / targetCumBits) * 100);
-  });
-  const poolReductionScore = poolPaceValues.reduce((a, b) => a + b, 0) / poolPaceValues.length;
-
-  const WEIGHTS = { quality: 0.35, speed: 0.25, luck: 0.15, poolReduction: 0.25 };
+  const WEIGHTS = { followup: 0.35, poolReduction: 0.2, endgame: 0.05, speed: 0.4 };
   const rawScore =
-    WEIGHTS.quality * guessQualityScore +
-    WEIGHTS.speed * speedEfficiencyScore +
-    WEIGHTS.luck * luckScore +
-    WEIGHTS.poolReduction * poolReductionScore;
+    WEIGHTS.followup * followupQualityScore +
+    WEIGHTS.poolReduction * poolReductionScore +
+    WEIGHTS.endgame * endgameConversionScore +
+    WEIGHTS.speed * speedEfficiencyScore;
   const score = Math.max(0, Math.min(100, rawScore));
 
   // +/- is a within-band modifier: top third of the band earns a +,
@@ -871,9 +882,9 @@ function renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency, theo
   if (!solvedAt) letter = score >= 50 ? (score >= 57.5 ? "D+" : score >= 42.5 ? "D" : "D-") : "F";
 
   const verdicts = {
-    S: "Near-optimal. Your guesses tracked the best word available at nearly every step, you solved at or ahead of a realistic guess-count target, and the outcomes largely matched what the entropy math expected.",
-    A: "Excellent play. Your guesses were consistently close to the best word Entrople could find for each step, and you solved efficiently relative to the information-theoretic floor.",
-    B: "A solid, above-average solve. Most guesses were close to optimal for their step, with some room to trim either guess quality or guess count.",
+    S: "Model-leading. Your guesses tracked the highest-scoring word available at nearly every step, cut the pool aggressively while it was still large, and solved at or ahead of a realistic guess-count target.",
+    A: "Excellent play. Your guesses were consistently close to the highest-scoring word Entrople could find for each step, and you solved efficiently relative to the information-theoretic floor.",
+    B: "A solid, above-average solve. Most guesses were close to the highest-scoring choice for their step, with some room to trim either guess quality or guess count.",
     C: "A workable solve, but a meaningful gap opened between the guesses you played and the best available guess at one or more steps, or you used more guesses than the candidate pool justified.",
     D: solvedAt
       ? "You solved it, but the guesses played were well off the best available guess for their step, the guess count ran well past a realistic target, or both."
@@ -890,32 +901,34 @@ function renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency, theo
 
   const rows = [
     {
-      label: "GUESS QUALITY",
-      detail: `avg ${guessQualityScore.toFixed(0)}% of best available guess's bits, per step`,
-      value: guessQualityScore,
-      weight: WEIGHTS.quality,
+      label: "CONDITIONAL INFORMATION EFFICIENCY",
+      detail: informedSteps.length
+        ? `avg ${followupQualityScore.toFixed(0)}% of the maximum balanced information score across ${informedSteps.length} posterior update${informedSteps.length === 1 ? "" : "s"}`
+        : "no posterior updates before the final answer",
+      value: followupQualityScore,
+      weight: WEIGHTS.followup,
     },
     {
-      label: "SOLVE SPEED",
+      label: "EXPECTED POSTERIOR REDUCTION",
+      detail: `conditional collision-information reduction vs. the maximum legal value, weighted by posterior size`,
+      value: poolReductionScore,
+      weight: WEIGHTS.poolReduction,
+    },
+    {
+      label: "POSTERIOR RESOLUTION",
+      detail: guessesToClose === null
+        ? "posterior candidate set never reached 10 before the final answer"
+        : `${guessesToClose} guess${guessesToClose === 1 ? "" : "es"} to resolve after the posterior reached 10 or fewer candidates`,
+      value: endgameConversionScore,
+      weight: WEIGHTS.endgame,
+    },
+    {
+      label: "GUESS-COUNT EFFICIENCY",
       detail: solvedAt
         ? `solved on guess ${solvedAt} of 6 (target ≤${speedTarget} given a ${theoreticalMin}-guess floor)`
         : "not solved",
       value: speedEfficiencyScore,
       weight: WEIGHTS.speed,
-    },
-    {
-      label: "POOL REDUCTION",
-      detail: `avg ${poolReductionScore.toFixed(0)}% of the bits you "should" have by each guess number, given a ${poolPaceTarget}-guess realistic pace -- over 100% means you were ahead of pace`,
-      value: poolReductionScore,
-      weight: WEIGHTS.poolReduction,
-    },
-    {
-      label: "PER-STEP LUCK FACTOR",
-      detail: `mean actual ÷ expected bits across ${luckValues.length} guess${
-        luckValues.length === 1 ? "" : "es"
-      }`,
-      value: luckScore,
-      weight: WEIGHTS.luck,
     },
   ];
 
@@ -934,11 +947,11 @@ function renderGrade(steps, solvedAt, guessesUsed, avgBits, infoEfficiency, theo
 
   renderFormula(
     "gradeFormula",
-    `\\text{Score} = 0.35(${guessQualityScore.toFixed(0)}) + 0.25(${speedEfficiencyScore.toFixed(
+    `\\text{Score} = 0.35(${followupQualityScore.toFixed(0)}) + 0.20(${poolReductionScore.toFixed(
       0
-    )}) + 0.25(${poolReductionScore.toFixed(0)}) + 0.15(${luckScore.toFixed(
+    )}) + 0.05(${endgameConversionScore.toFixed(
       0
-    )}) = ${score.toFixed(1)} \\Rightarrow \\text{${letter}}`,
+    )}) + 0.40(${speedEfficiencyScore.toFixed(0)}) = ${score.toFixed(1)} \\Rightarrow \\text{${letter}}`,
     true
   );
 }
@@ -1008,7 +1021,6 @@ function renderTraps(steps, solvedAt) {
       .map((s) => s.guess);
     const posLabel = trap.openPositions.map((p) => p + 1).join(" & ");
     const bitsNeeded = Math.log2(trap.familySize);
-    const efficient = trap.span <= Math.ceil(bitsNeeded);
     const familyPreview = trap.family.slice(0, 12);
     const overflow = trap.family.length - familyPreview.length;
 
@@ -1045,19 +1057,10 @@ function renderTraps(steps, solvedAt) {
         ${familyPreview.map(highlightWord).join(", ")}${overflow > 0 ? `, +${overflow} more` : ""}
       </p>
       <p class="trap-copy">
-        With only ${openPositionsWord(trap.openPositions.length)} actually undetermined, a normal
-        guess can't teach you much more than "yes" or "no" on one candidate at a time. The
-        information-theoretic cost of telling ${trap.familySize} words apart is only
-        log₂(${trap.familySize}) ≈ ${bitsNeeded.toFixed(2)} bits, but real guesses spent here:
-        <b>${trap.span}</b>${
-      trap.span > 1
-        ? ` (${guessesInTrap.join(" → ")})`
-        : ""
-    }. ${
-      efficient
-        ? "You cleared the trap about as fast as the math allowed."
-        : "That's more guesses than the family's raw information content required. The trap cost you tempo."
-    }
+        With ${openPositionsWord(trap.openPositions.length)} still varying, this family carries
+        log₂(${trap.familySize}) ≈ ${bitsNeeded.toFixed(2)} bits of remaining identity uncertainty.
+        Your route spent <b>${trap.span}</b> guess${trap.span === 1 ? "" : "es"} while this family remained live:
+        ${guessesInTrap.join(" → ")}.
       </p>
     `;
 
@@ -1097,6 +1100,10 @@ function renderFormulaReference() {
     `\\mathbb{E}[N'] = \\sum_i p_i n_i = \\dfrac{1}{N}\\sum_i n_i^2`
   );
   renderFormula(
+    "fCandidateReduction",
+    `I_{\\text{reduce}} = \\log_2\\!\\left(\\dfrac{N}{\\mathbb{E}[N']}\\right)`
+  );
+  renderFormula(
     "fVariance",
     `\\sigma^2 = \\dfrac{1}{k}\\sum_i (n_i - \\bar n)^2, \\quad \\bar n = \\dfrac{N}{k}`
   );
@@ -1110,12 +1117,12 @@ function renderFormulaReference() {
   );
   renderFormula(
     "fWinBonus",
-    `H'(\\text{guess}) = H(\\text{guess}) + p_{\\text{win}}, \\quad p_{\\text{win}} = \\Pr(\\text{guess is the answer}) = \\dfrac{n_{\\text{GGGGG}}}{N}`
+    `R(\\text{guess}) = \\dfrac{H'(\\text{guess}) + I_{\\text{reduce}}}{2}, \\quad H' = H + p_{\\text{win}}`
   );
 }
 
 async function lookupFreeDictionary(word) {
-  const res = await fetch(DEFINE_API(word));
+  const res = await fetchWithTimeout(DEFINE_API(word));
   if (!res.ok) return null;
 
   const data = await res.json();
@@ -1127,7 +1134,7 @@ async function lookupFreeDictionary(word) {
 }
 
 async function lookupWiktionary(word) {
-  const res = await fetch(WIKTIONARY_API(word));
+  const res = await fetchWithTimeout(WIKTIONARY_API(word));
   if (!res.ok) return null;
 
   const data = await res.json();
@@ -1142,7 +1149,8 @@ async function lookupWiktionary(word) {
   return { definition, partOfSpeech: posBlock.partOfSpeech, source: "Wiktionary" };
 }
 
-async function renderDefinition(answer) {
+async function renderDefinition(answer, analyzerRun) {
+  const request = ++definitionRevision;
   const card = document.querySelector("#defineCard");
   const body = document.querySelector("#defineBody");
 
@@ -1160,6 +1168,8 @@ async function renderDefinition(answer) {
     result = null;
   }
 
+  if (request !== definitionRevision || analyzerRun !== analyzerRevision) return;
+
   if (!result) {
     try {
       result = await lookupWiktionary(answer);
@@ -1168,10 +1178,14 @@ async function renderDefinition(answer) {
     }
   }
 
+  if (request !== definitionRevision || analyzerRun !== analyzerRevision) return;
+
   if (result) {
     body.innerHTML = `<b>${answer}</b>${commonnessBadge}${
-      result.partOfSpeech ? ` <em>${result.partOfSpeech}</em>` : ""
-    }: ${result.definition}<span class="define-source">SOURCE: ${result.source.toUpperCase()}</span>`;
+      result.partOfSpeech ? ` <em>${escapeHtml(result.partOfSpeech)}</em>` : ""
+    }: ${escapeHtml(result.definition)}<span class="define-source">SOURCE: ${escapeHtml(
+      result.source.toUpperCase()
+    )}</span>`;
   } else {
     body.innerHTML =
       `<b>${answer}</b>${commonnessBadge}: no definition found in either connected dictionary source ` +
@@ -1207,7 +1221,7 @@ function disconnectSolveObserver(cardSelector) {
 
 let cachedSolve = null; // { answer, steps }, avoids re-running the search on replay
 
-function renderEntropleSolve(answer, context) {
+function renderEntropleSolve(answer, context, revision) {
   const ids = SOLVE_IDS.analyzer;
   const card = document.querySelector(ids.card);
   const boardEl = document.querySelector(ids.board);
@@ -1232,41 +1246,45 @@ function renderEntropleSolve(answer, context) {
   boardEl.innerHTML = "";
   boardEl.classList.remove("animate");
   stepsEl.classList.remove("animate");
-  stepsEl.innerHTML = `<p class="solve-empty">Solving with win-bonus-adjusted entropy search…</p>`;
+  stepsEl.innerHTML = `<p class="solve-empty">Solving with balanced information search…</p>`;
   summaryEl.textContent = "";
   replayBtn.classList.add("hidden");
 
   setTimeout(() => {
+    if (revision !== analyzerRevision) return;
     const steps = simulateOptimalSolve(answer);
     cachedSolve = { answer, steps };
 
     buildSolveBoard(steps, ids);
 
-    const solvedAt = steps.length;
+    const solved = steps.at(-1)?.solved === true;
+    const solvedAt = solved ? steps.length : null;
     let compareLine = "";
 
-    if (context && context.solvedAt) {
+    if (!solved) {
+      compareLine = " Entrople could not isolate this answer within six guesses from the loaded legal dictionary.";
+    } else if (context && context.solvedAt) {
       const diff = context.solvedAt - solvedAt;
       if (diff > 0) {
-        compareLine = ` Your solve used ${diff} more ${diff === 1 ? "guess" : "guesses"} than this optimal route.`;
+        compareLine = ` Your solve used ${diff} more ${diff === 1 ? "guess" : "guesses"} than Entrople's model route.`;
       } else if (diff === 0) {
-        compareLine = ` Your solve matched the optimal route's guess count exactly.`;
+        compareLine = ` Your solve matched Entrople's model route's guess count exactly.`;
       } else {
         const beat = -diff;
         compareLine =
-          ` Your solve actually beat the win-bonus-adjusted search by ${beat} ${beat === 1 ? "guess" : "guesses"}, a` +
-          ` well-timed non-greedy pick can still win faster than always taking the highest` +
-          ` adjusted-entropy legal guess.`;
+          ` Your solve actually beat Entrople's balanced search by ${beat} ${beat === 1 ? "guess" : "guesses"}.`;
       }
     } else if (context && !context.solvedAt) {
       compareLine = ` Your board didn't reach the answer within the guesses evaluated.`;
     }
 
-    summaryEl.innerHTML =
-      `Playing win-bonus-adjusted entropy search (always the single highest adjusted-information ` +
-      `legal guess, honoring ${solveMode === "hard" ? "Hard Mode" : "Normal Mode"}), Entrople solves <b>${answer}</b> in <b>${solvedAt} ${
-        solvedAt === 1 ? "guess" : "guesses"
-      }</b> against the live ${words.answers.length.toLocaleString()}-word pool.${compareLine}`;
+    summaryEl.innerHTML = solved
+      ? `Playing balanced information search (the highest balanced-score legal guess, honoring ${
+          solveMode === "hard" ? "Hard Mode" : "Normal Mode"
+        }), Entrople solves <b>${answer}</b> in <b>${solvedAt} ${
+          solvedAt === 1 ? "guess" : "guesses"
+        }</b> against the live ${words.answers.length.toLocaleString()}-word pool.${compareLine}`
+      : `Playing balanced information search against the live ${words.answers.length.toLocaleString()}-word pool.${compareLine}`;
 
     replayBtn.classList.remove("hidden");
     armSolveReveal(ids);
@@ -1345,9 +1363,13 @@ function buildSolveBoard(steps, ids) {
         step.solved
           ? "Exact match. Solved."
           : `${step.before.toLocaleString()} → ${step.after.toLocaleString()} candidates` +
-            (step.bits ? ` · ${fmtBits(step.bits)} expected` : "")
+            (step.rankingScore
+              ? ` · R ${fmtBits(step.rankingScore)}`
+              : step.bits
+              ? ` · ${fmtBits(step.bits)} expected`
+              : "")
       }</p>
-      <span class="score">${step.bits ? fmtBits(step.bits) : ""}</span>
+      <span class="score">${step.rankingScore ? `R ${fmtBits(step.rankingScore)}` : step.bits ? fmtBits(step.bits) : ""}</span>
     `;
     stepsEl.appendChild(line);
   });
@@ -1397,14 +1419,23 @@ document.querySelector("#solveReplay").addEventListener("click", () => {
   triggerSolveAnimation(SOLVE_IDS.analyzer);
 });
 
-document.querySelectorAll(".mode-btn").forEach((btn) => {
+document.querySelectorAll("#modeHard, #modeEasy").forEach((btn) => {
   btn.addEventListener("click", () => {
     if (btn.dataset.mode === solveMode) return;
     solveMode = btn.dataset.mode;
     document
-      .querySelectorAll(".mode-btn")
+      .querySelectorAll("#modeHard, #modeEasy")
       .forEach((b) => b.classList.toggle("active", b.dataset.mode === solveMode));
     analyze();
+    if (cachedTodaySolve) {
+      const request = ++todayRequestRevision;
+      stopTodaySolveWorker();
+      const revealBtn = document.querySelector("#todayRevealBtn");
+      revealBtn.disabled = true;
+      revealBtn.textContent = "SOLVING…";
+      setTodayFetchStatus("Re-solving with the selected mode…", "ready");
+      solveTodayInWorker(cachedTodaySolve.answer, cachedTodaySolve.puzzle, request);
+    }
   });
 });
 
@@ -1413,6 +1444,8 @@ document.querySelectorAll(".mode-btn").forEach((btn) => {
 /* ---------------------------------------------------------------------- */
 
 let cachedTodaySolve = null; // { answer, steps, puzzle }, avoids re-solving on reveal/replay
+let todayRequestRevision = 0;
+let todaySolveWorker = null;
 
 // Renders the guess-by-guess entropy breakdown for the today's-Wordle tab.
 // Mirrors renderDeepMath's per-step stat cards and KaTeX formulas, but works
@@ -1440,7 +1473,7 @@ function renderTodayDeepMath(steps, startSize) {
       <div class="deep-stats">
         <div><p>ACTUAL INFO GAINED</p><strong>${fmtBits(step.actualBits)}</strong></div>
         <div><p>RAW ENTROPY</p><strong>${fmtBits(p.bits)}</strong></div>
-        <div><p>WIN-BONUS ADJUSTED</p><strong>${fmtBits(p.adjustedBits)}</strong></div>
+        <div><p>BALANCED SCORE</p><strong>${fmtBits(p.rankingScore)}</strong></div>
       </div>
       <div class="deep-stats-2">
         <div><p>PATTERN BUCKETS USED</p><strong>${p.bucketsUsed} / 243</strong></div>
@@ -1474,7 +1507,7 @@ function renderTodayDeepMath(steps, startSize) {
             ? `Exact match: this word was itself the top-ranked candidate, carrying a ${(p.pWin * 100).toFixed(
                 1
               )}% chance of being the answer baked directly into its score.`
-            : `Chosen as the single highest win-bonus-adjusted score across the ${step.before.toLocaleString()}-word live candidate pool. The largest single bucket it could have landed in held ${p.maxBucket.toLocaleString()} of those candidates (mean bucket size across the ${
+            : `Chosen as the highest balanced score across the ${step.before.toLocaleString()}-word live candidate pool. It leaves ${p.expectedRemaining.toFixed(1)} candidates on average; the largest single bucket holds ${p.maxBucket.toLocaleString()} of those candidates (mean bucket size across the ${
                 p.bucketsUsed
               } realized patterns was ${p.mean.toFixed(1)}).`
         }
@@ -1544,18 +1577,22 @@ function renderTodayDeepMath(steps, startSize) {
 // today's answer is known and the live dictionary is ready. Nothing here is
 // visible until the person clicks the reveal button — the spoiler cover just
 // blurs the already-built DOM.
-function finishTodaySolve(answer, puzzle) {
-  const steps = simulateOptimalSolveDeep(answer);
+function finishTodaySolve(answer, puzzle, suppliedSteps) {
+  answer = clean(answer);
+  const steps = suppliedSteps || simulateOptimalSolveDeep(answer);
   cachedTodaySolve = { answer, steps, puzzle };
 
   buildSolveBoard(steps, SOLVE_IDS.today);
 
-  const solvedAt = steps.length;
-  document.querySelector("#todaySolveSummary").innerHTML =
-    `Playing win-bonus-adjusted entropy search (always the single highest adjusted-information ` +
-    `legal guess, honoring ${solveMode === "hard" ? "Hard Mode" : "Normal Mode"}), Entrople solves today's ` +
-    `answer in <b>${solvedAt} ${solvedAt === 1 ? "guess" : "guesses"}</b> against the live ` +
-    `${words.answers.length.toLocaleString()}-word pool.`;
+  const solved = steps.at(-1)?.solved === true;
+  const solvedAt = solved ? steps.length : null;
+  document.querySelector("#todaySolveSummary").innerHTML = solved
+    ? `Playing balanced information search (the highest balanced-score legal guess, honoring ${
+        solveMode === "hard" ? "Hard Mode" : "Normal Mode"
+      }), Entrople solves today's answer in <b>${solvedAt} ${
+        solvedAt === 1 ? "guess" : "guesses"
+      }</b> against the live ${words.answers.length.toLocaleString()}-word pool.`
+    : `Entrople could not isolate today's answer from the loaded legal dictionary within six guesses.`;
 
   const poolSize = words.answers.length;
   const baseBits = Math.log2(poolSize);
@@ -1563,14 +1600,68 @@ function finishTodaySolve(answer, puzzle) {
   document.querySelector("#todayPoolSizeLabel").textContent = poolSize.toLocaleString();
   document.querySelector("#todayMathCopy").textContent =
     `Starting from a live ${poolSize.toLocaleString()}-word answer pool, identifying one exact answer ` +
-    `requires log₂(${poolSize.toLocaleString()}) = ${baseBits.toFixed(2)} bits. Entrople reached it in ` +
-    `${solvedAt} of 6 guesses.`;
+    `requires log₂(${poolSize.toLocaleString()}) = ${baseBits.toFixed(2)} bits. ${
+      solved ? `Entrople reached it in ${solvedAt} of 6 guesses.` : "Entrople did not reach it within 6 guesses."
+    }`;
 
   renderTodayDeepMath(steps, poolSize);
 
   const revealBtn = document.querySelector("#todayRevealBtn");
   revealBtn.disabled = false;
   revealBtn.textContent = "REVEAL TODAY'S SOLVE →";
+}
+
+function stopTodaySolveWorker() {
+  if (todaySolveWorker) todaySolveWorker.terminate();
+  todaySolveWorker = null;
+}
+
+function completeTodaySolve(answer, puzzle, steps) {
+  finishTodaySolve(answer, puzzle, steps);
+  const label = puzzle
+    ? `Puzzle #${puzzle.id ?? "?"} fetched · route complete`
+    : `${answer} entered manually · route complete`;
+  setTodayFetchStatus(label, "ready");
+}
+
+function solveTodayInWorker(answer, puzzle, request) {
+  // A worker keeps the large opening-pool ranking from blocking the UI. The
+  // synchronous fallback keeps file:// use functional in environments that
+  // disallow workers.
+  if (typeof Worker === "undefined") {
+    completeTodaySolve(answer, puzzle);
+    return;
+  }
+
+  try {
+    todaySolveWorker = new Worker("js/core/simulation-worker.js");
+  } catch (err) {
+    console.warn("Entrople: could not start today's solve worker; solving on the main thread instead", err);
+    completeTodaySolve(answer, puzzle);
+    return;
+  }
+
+  todaySolveWorker.onmessage = (event) => {
+    if (event.data?.type !== "solveDone" || request !== todayRequestRevision) return;
+    const steps = event.data.steps;
+    stopTodaySolveWorker();
+    completeTodaySolve(answer, puzzle, steps);
+  };
+
+  todaySolveWorker.onerror = (err) => {
+    if (request !== todayRequestRevision) return;
+    console.warn("Entrople: today's solve worker failed; solving on the main thread instead", err);
+    stopTodaySolveWorker();
+    completeTodaySolve(answer, puzzle);
+  };
+
+  todaySolveWorker.postMessage({
+    type: "solve",
+    answer,
+    answerPool: words.answers,
+    fullDictionaryArr: [...words.guesses],
+    hardMode: solveMode === "hard",
+  });
 }
 
 function setTodayFetchStatus(text, tone) {
@@ -1587,6 +1678,8 @@ function showTodayError(message) {
 }
 
 async function initTodaySolve() {
+  const request = ++todayRequestRevision;
+  stopTodaySolveWorker();
   const dateStr = todaysEasternDate();
   const dateLabel = document.querySelector("#todayDateLabel");
   const revealBtn = document.querySelector("#todayRevealBtn");
@@ -1612,6 +1705,7 @@ async function initTodaySolve() {
     setTodayFetchStatus("Fetching today's puzzle from the NYT Wordle API…");
     puzzle = await fetchTodaysWordle(dateStr);
   } catch (err) {
+    if (request !== todayRequestRevision) return;
     console.error("Entrople: couldn't fetch today's Wordle", err);
     setTodayFetchStatus("Could not reach the NYT Wordle API.", "error");
     showTodayError(
@@ -1625,7 +1719,10 @@ async function initTodaySolve() {
   // Wait for the live word dictionary if it's still loading.
   while (words.status === "loading") {
     await new Promise((resolve) => setTimeout(resolve, 150));
+    if (request !== todayRequestRevision) return;
   }
+
+  if (request !== todayRequestRevision) return;
 
   if (words.status !== "ready") {
     setTodayFetchStatus("Live word dictionary unavailable.", "error");
@@ -1641,12 +1738,13 @@ async function initTodaySolve() {
     "ready"
   );
 
-  finishTodaySolve(puzzle.solution.toUpperCase(), puzzle);
+  setTodayFetchStatus(`Puzzle #${puzzle.id ?? "?"} fetched · solving…`, "ready");
+  solveTodayInWorker(puzzle.solution.toUpperCase(), puzzle, request);
 }
 
 /* --- Deep Simulation tab ---
    Fixes a different opening guess per simulated game, then hands the rest of
-   the game to Entrople's own win-bonus-adjusted entropy search, and reports
+   the game to Entrople's own balanced information search, and reports
    how many of those games win inside six guesses. The batch loop runs in a
    Web Worker (js/core/simulation-worker.js) so a large sample doesn't freeze
    the tab; the main thread only accumulates progress and renders results. */
@@ -1791,7 +1889,7 @@ function renderSimOpenerDetail(container, result) {
     note.className = "hint";
     note.textContent =
       `After all 6 guesses, ${plural(last.after, "candidate")} still fit every clue: the ` +
-      `win-bonus-adjusted entropy search ran out of guesses before it could isolate ${simCurrentAnswer}.`;
+      `balanced information search ran out of guesses before it could isolate ${simCurrentAnswer}.`;
     container.appendChild(note);
   }
 }
@@ -2182,6 +2280,9 @@ function buildGroupedBarChart(metrics) {
 }
 
 function finishSimulation(cancelled) {
+  if (simWorker) {
+    simWorker.terminate();
+  }
   setSimRunning(false);
   simWorker = null;
 
@@ -2553,9 +2654,14 @@ document.querySelector("#todayManualSolve").addEventListener("click", () => {
   }
 
   errorEl.textContent = "";
+  const request = ++todayRequestRevision;
+  stopTodaySolveWorker();
   setTodayFetchStatus(`Solving ${answer} manually…`, "ready");
   document.querySelector("#todayDateLabel").textContent = `Manual entry · ${answer}`;
-  finishTodaySolve(answer, null);
+  const revealBtn = document.querySelector("#todayRevealBtn");
+  revealBtn.disabled = true;
+  revealBtn.textContent = "SOLVING…";
+  solveTodayInWorker(answer, null, request);
 });
 
 document.querySelector("#todayRevealBtn").addEventListener("click", () => {

@@ -1,5 +1,5 @@
 /* Entrople, deep simulation worker.
-   Batch-simulates Entrople's own win-bonus-adjusted entropy search across many
+   Batch-simulates Entrople's own balanced information search across many
    different fixed opening guesses against one answer, off the main thread, so
    the "Deep Simulation" tab can throw hundreds or thousands of games at the
    math without freezing the page. Pure computation, no DOM access.
@@ -15,7 +15,17 @@ importScripts("entropy-math.js", "simulation.js");
 self.onmessage = (event) => {
   const msg = event.data;
   if (msg && msg.type === "run") runSimulation(msg);
+  if (msg && msg.type === "solve") runDeepSolve(msg);
 };
+
+// A single full solve can still spend most of its time ranking the first
+// large candidate pool. Keep that work off the UI thread too; unlike the
+// batch simulation, this sends one fully detailed route back when complete.
+function runDeepSolve({ answer, answerPool, fullDictionaryArr, hardMode }) {
+  const fullDictionary = new Set(fullDictionaryArr);
+  const steps = simulateOptimalSolveDeep(answer, answerPool, fullDictionary, hardMode);
+  self.postMessage({ type: "solveDone", steps });
+}
 
 function runSimulation({ answer, openers, answerPool, fullDictionaryArr, hardMode }) {
   const fullDictionary = new Set(fullDictionaryArr);

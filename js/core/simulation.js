@@ -34,12 +34,11 @@ function seedCandidatePool(answerPool, answer, fullDictionary) {
   return candidates;
 }
 
-// Win-bonus-adjusted entropy solve, independent of the user's guesses. Honors
+// Balanced-information solve, independent of the user's guesses. Honors
 // Hard Mode when active, so suggested guesses stay legal (must reuse all
 // previously revealed green/yellow letters); ranking within that legal set
-// uses adjustedBits (see entropy-math.js: guessEntropy) so a guess that
-// could itself win outright is never just tied with an equally-splitting
-// guess that can't be the answer.
+// uses the balanced ranking score (see entropy-math.js: guessEntropy), which
+// weighs both entropy and expected candidate reduction.
 //
 // Reads the live word list (`words`) and the analyzer's Hard/Easy toggle
 // (`solveMode`) from app.js's global state, same as the rest of this
@@ -52,7 +51,7 @@ function simulateOptimalSolve(answer) {
   for (let guessNum = 1; guessNum <= 6; guessNum++) {
     if (candidates.length === 0) break; // feedback ruled out every candidate; unsolved
     const before = candidates.length;
-    let guess, bits = 0, searched = "candidate pool";
+    let guess, bits = 0, rankingScore = 0, searched = "candidate pool";
 
     if (candidates.length === 1) {
       guess = candidates[0];
@@ -65,6 +64,7 @@ function simulateOptimalSolve(answer) {
       );
       guess = best.top[0].word;
       bits = best.top[0].bits;
+      rankingScore = best.top[0].rankingScore;
       searched = best.searched;
     }
 
@@ -74,7 +74,7 @@ function simulateOptimalSolve(answer) {
     candidates = narrowCandidates(candidates, guess, code);
 
     const solved = guess === answer;
-    steps.push({ guess, marks, before, after: candidates.length, bits, searched, solved });
+    steps.push({ guess, marks, before, after: candidates.length, bits, rankingScore, searched, solved });
     if (solved) break;
   }
 
@@ -85,8 +85,13 @@ function simulateOptimalSolve(answer) {
 // profile (bucket stats, KL divergence, win-bonus breakdown) and the live
 // candidate pool at that point, so the caller can render a full math breakdown
 // alongside the board rather than just the summary line.
-function simulateOptimalSolveDeep(answer, candidatePool) {
-  let candidates = seedCandidatePool(candidatePool || words.answers, answer, words.guesses);
+function simulateOptimalSolveDeep(
+  answer,
+  candidatePool = words.answers,
+  fullDictionary = words.guesses,
+  hardMode = solveMode === "hard"
+) {
+  let candidates = seedCandidatePool(candidatePool, answer, fullDictionary);
 
   const steps = [];
   let hardHistory = [];
@@ -104,8 +109,8 @@ function simulateOptimalSolveDeep(answer, candidatePool) {
       const best = findBestGuesses(
         candidates,
         1,
-        solveMode === "hard" ? hardHistory : null,
-        words.guesses
+        hardMode ? hardHistory : null,
+        fullDictionary
       );
       guess = best.top[0].word;
       profile = guessPartitionProfile(guess, candidates);
@@ -157,7 +162,7 @@ function computeOpenerRoute(answer, guessesUsed) {
 }
 
 // Plays out one game with `opener` forced as guess #1, then hands every
-// remaining guess to findBestGuesses (the same win-bonus-adjusted search the
+// remaining guess to findBestGuesses (the same balanced information search the
 // analyzer and "today" tabs use), narrowing the real candidate pool by the
 // actual feedback that guess produces against `answer`.
 //
