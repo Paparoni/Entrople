@@ -2,7 +2,7 @@ name: Update today's Wordle answer
 
 on:
   schedule:
-    # A single cron fire at 4:01/5:01 UTC (the two possible Eastern
+    # A single cron fire at 4:00/5:00 UTC (the two possible Eastern
     # midnights) is best-effort only -- GitHub explicitly documents that
     # scheduled workflows can be delayed, especially for low-traffic public
     # repos when the scheduler queue is backed up. This repo has seen a fire
@@ -12,8 +12,13 @@ on:
     # 11:00pm-3:59am EST). Each run is a near-instant no-op once the archive
     # already has today's date (see scripts/update-wordle.mjs), so the extra
     # runs cost a few seconds of free public-repo Actions time, not
-    # meaningfully more.
+    # meaningfully more. A later recovery run makes this self-healing if
+    # GitHub's scheduler delays every midnight-window attempt past 09:00 UTC:
+    # the script also backfills yesterday, so any missed entry is recovered.
     - cron: "*/15 4-8 * * *"
+    # 08:00 EDT / 07:00 EST: one same-day recovery attempt outside the
+    # high-contention midnight window.
+    - cron: "7 12 * * *"
   workflow_dispatch: {}
 
 permissions:
