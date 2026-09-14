@@ -40,5 +40,11 @@
     "solution": "focus",
     "print_date": "2026-09-13",
     "days_since_launch": 1912
+  },
+  "2026-09-14": {
+    "id": 2029,
+    "solution": "rinse",
+    "print_date": "2026-09-14",
+    "days_since_launch": 1913
   }
 }
