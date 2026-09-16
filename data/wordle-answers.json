@@ -52,5 +52,11 @@
     "solution": "dealt",
     "print_date": "2026-09-15",
     "days_since_launch": 1914
+  },
+  "2026-09-16": {
+    "id": 1391,
+    "solution": "wispy",
+    "print_date": "2026-09-16",
+    "days_since_launch": 1915
   }
 }
