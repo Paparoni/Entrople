@@ -652,7 +652,11 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed, revisio
           ${bestProfile.mean.toFixed(1)}).
         </p>
         <div class="next-best">
-          <p class="next-best-title">TOP ${step.best.top.length} GUESSES FOR THIS STEP</p>
+          <button type="button" class="next-best-toggle" aria-expanded="false" aria-controls="topGuessDetails-${i}">
+            <span class="next-best-title">TOP ${step.best.top.length} GUESSES FOR THIS STEP</span>
+            <span class="next-best-toggle-state">SHOW RANKING ↓</span>
+          </button>
+          <div id="topGuessDetails-${i}" class="hidden">
           <div class="next-best-list">
             ${step.best.top
               .map((cand, ci) => {
@@ -701,6 +705,7 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed, revisio
               .join("")}
           </div>
           <p class="next-best-mode-note">The ranking balances two information-theory measures equally: win-bonus-adjusted Shannon entropy (how broadly the feedback splits the pool) and candidate-reduction information, log<sub>2</sub>(N / E[N′]) (how few candidates the feedback leaves on average). A possible-answer guess still receives the Healy win bonus, so a chance to solve immediately counts. The pool line shows the direct result of that second measure: lower average and worst-case counts are better. Commonness and vowel notes are explanatory only, not extra score terms.</p>
+          </div>
         </div>
       `;
 
@@ -1015,6 +1020,7 @@ function renderTraps(steps, solvedAt) {
   }
 
   card.classList.remove("hidden");
+  setAvoidedTrapExpanded(false);
   body.innerHTML = "";
 
   traps.forEach((trap) => {
@@ -1176,6 +1182,15 @@ function renderAvoidedTraps(steps) {
       `f(${trap.guess}, \\text{answer}) \\ne B \\Rightarrow \\text{trap branch avoided}; \\quad H(\\text{answer} \\mid B)=\\log_2(${trap.familySize})=${Math.log2(trap.familySize).toFixed(2)}\\text{ bits}`
     );
   });
+}
+
+function setAvoidedTrapExpanded(expanded) {
+  const details = document.querySelector("#avoidedTrapDetails");
+  const toggle = document.querySelector("#avoidedTrapToggle");
+  const label = document.querySelector("#avoidedTrapToggleState");
+  details.classList.toggle("hidden", !expanded);
+  toggle.setAttribute("aria-expanded", String(expanded));
+  label.textContent = expanded ? "HIDE DETAILS ↑" : "SHOW DETAILS ↓";
 }
 
 function openPositionsWord(n) {
@@ -1517,6 +1532,23 @@ document.querySelector("#clearBtn").addEventListener("click", () => {
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   analyze();
+});
+
+document.querySelector("#avoidedTrapToggle").addEventListener("click", () => {
+  const toggle = document.querySelector("#avoidedTrapToggle");
+  setAvoidedTrapExpanded(toggle.getAttribute("aria-expanded") !== "true");
+});
+
+document.querySelector("#deepBody").addEventListener("click", (event) => {
+  const toggle = event.target.closest(".next-best-toggle");
+  if (!toggle) return;
+  const details = document.querySelector(`#${toggle.getAttribute("aria-controls")}`);
+  const expanded = toggle.getAttribute("aria-expanded") !== "true";
+  details.classList.toggle("hidden", !expanded);
+  toggle.setAttribute("aria-expanded", String(expanded));
+  toggle.querySelector(".next-best-toggle-state").textContent = expanded
+    ? "HIDE RANKING ↑"
+    : "SHOW RANKING ↓";
 });
 
 document.querySelector("#solveReplay").addEventListener("click", () => {
