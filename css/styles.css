@@ -83,6 +83,12 @@
 /* --- Trap detector --- */
 .trap-card{background:#fbf1e6}
 .trap-card.hidden{display:none}
+.trap-avoided-card{background:#edf5eb}
+.trap-avoided-card .trap-row{border-color:#bdd1b8}
+.trap-avoided-card .trap-row-head span{color:#356640;background:#d7e8d2}
+.trap-avoided-card .trap-copy{color:#405641}
+.trap-avoided-card .trap-family{background:#253b28}
+.trap-avoided-card .trap-family b{color:#a9dba2}
 .trap-clean{font-size:12px;line-height:1.65;color:#4c4e48;margin:14px 0 0}
 .trap-row{border-top:1px dashed #d9c9a8;padding:16px 0}
 .trap-row:first-child{border-top:0;padding-top:6px}

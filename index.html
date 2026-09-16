@@ -93,6 +93,12 @@
           <div id="trapBody"></div>
         </article>
 
+        <article class="math-card trap-card trap-avoided-card hidden" id="avoidedTrapCard">
+          <div class="math-title"><p>TRAPS AVOIDED</p><span>COUNTERFACTUAL BRANCHES</span></div>
+          <p class="deep-intro">For each guess, Entrople also checks the feedback branches you did not receive. Under the same equal-likelihood model used for the live candidate pool, these are swap-family traps that were possible, but that your actual feedback safely bypassed.</p>
+          <div id="avoidedTrapBody"></div>
+        </article>
+
         <article class="math-card deep-card" id="deepCard">
           <div class="math-title"><p>DEEP MATH</p><span>CANDIDATE NARROWING &amp; ENTROPY</span></div>
           <p class="deep-intro">For each guess: how many real answers were still possible before and after, the actual bits of information gained, the entropy that guess was <em>expected</em> to yield against the live candidate pool, the shape of the resulting partition, and the strongest guess Entrople could find for that step.</p>
@@ -106,6 +112,7 @@
             <p class="formula-ref-title">FORMULA REFERENCE</p>
             <div class="formula-grid">
               <div class="formula-item"><span>Pattern probability</span><div id="fPattern"></div></div>
+              <div class="formula-item"><span>Counterfactual trap branch</span><div id="fTrapBranch"></div></div>
               <div class="formula-item"><span>Shannon entropy of a guess</span><div id="fEntropy"></div></div>
               <div class="formula-item"><span>Actual information gained</span><div id="fActual"></div></div>
               <div class="formula-item"><span>Expected candidates remaining</span><div id="fExpectedRemain"></div></div>
@@ -118,6 +125,7 @@
             <p class="references-title">REFERENCES</p>
             <ol class="references">
               <li><span>Shannon, C. E.</span> (1948). <em>A Mathematical Theory of Communication.</em> Bell System Technical Journal, 27(3), 379–423. Source of the entropy formula H = −Σ pᵢ log₂ pᵢ used for every guess's expected information.</li>
+              <li><span>Cover, T. M. &amp; Thomas, J. A.</span> (2006). <em>Elements of Information Theory</em> (2nd ed.). Wiley. <a href="https://doi.org/10.1002/047174882X" target="_blank" rel="noopener">doi.org/10.1002/047174882X</a>. Source for the conditional probability and conditional-entropy framing used by “Traps Avoided”: each feedback branch is a conditional subset of the live candidate pool.</li>
               <li><span>Kullback, S. &amp; Leibler, R. A.</span> (1951). <em>On Information and Sufficiency.</em> Annals of Mathematical Statistics, 22(1), 79–86. Source of the D<sub>KL</sub>(P‖U) divergence used to score how uneven a guess's pattern split is.</li>
               <li><span>Aladaileh, T., Stephens, D., Alqaisi, M., &amp; Wu, C.</span> (2026). <em>Solving Wordle Using Information Theory.</em> Northeast Journal of Complex Systems, 8(1), Article 6. <a href="https://doi.org/10.63562/2577-8439.1146" target="_blank" rel="noopener">doi.org/10.63562/2577-8439.1146</a>. Entropy-based guess selection applied specifically to Wordle, the basis for Entrople's "best guess" search.</li>
               <li><span>Mishra, N.</span> (2024). <em>Using Information Theory to Play Wordle as Optimally as Possible.</em> NHSJS. <a href="https://nhsjs.com/?p=12299" target="_blank" rel="noopener">nhsjs.com/?p=12299</a>. Worked derivation of expected-information guess ranking that Entrople's entropy search follows.</li>

@@ -559,6 +559,7 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed, revisio
         guess,
         beforeCandidates,
         before,
+        actualCode,
         after: narrowed.length > 0 ? candidates.length : 0,
         actualBits,
         cumulativeBits: totalBits,
@@ -785,6 +786,7 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed, revisio
       renderGrade(steps, solvedAt, guessesUsed, theoreticalMin);
     }
     renderTraps(steps, solvedAt);
+    renderAvoidedTraps(steps);
   }, 20);
 }
 
@@ -1076,6 +1078,106 @@ function renderTraps(steps, solvedAt) {
   }
 }
 
+// A played guess has many possible feedback branches. Inspect the branches the
+// answer did not take for swap families that would have forced near-blind trial
+// and error. This is avoided risk, not a quality score for the player's guess.
+function analyzeAvoidedTraps(steps) {
+  const avoided = [];
+
+  steps.forEach((step, stepIndex) => {
+    const branches = new Map();
+    step.beforeCandidates.forEach((candidate) => {
+      const code = feedbackCode(step.guess, candidate);
+      if (!branches.has(code)) branches.set(code, []);
+      branches.get(code).push(candidate);
+    });
+
+    branches.forEach((family, code) => {
+      if (code === step.actualCode || family.length < 3) return;
+
+      const openPositions = [];
+      for (let pos = 0; pos < 5; pos++) {
+        if (new Set(family.map((word) => word[pos])).size > 1) openPositions.push(pos);
+      }
+      if (openPositions.length < 1 || openPositions.length > 2) return;
+
+      avoided.push({
+        stepIndex,
+        guess: step.guess,
+        before: step.before,
+        family,
+        familySize: family.length,
+        openPositions,
+        probability: family.length / step.before,
+      });
+    });
+  });
+
+  return avoided.sort(
+    (a, b) => b.probability - a.probability || b.familySize - a.familySize
+  );
+}
+
+function renderAvoidedTraps(steps) {
+  const card = document.querySelector("#avoidedTrapCard");
+  const body = document.querySelector("#avoidedTrapBody");
+  const avoided = analyzeAvoidedTraps(steps);
+
+  if (!avoided.length) {
+    card.classList.add("hidden");
+    body.innerHTML = "";
+    return;
+  }
+
+  card.classList.remove("hidden");
+  body.innerHTML = "";
+
+  // Show the highest-risk alternatives, rather than flooding the result with
+  // every small branch from a broad opening guess.
+  avoided.slice(0, 3).forEach((trap, index) => {
+    const posLabel = trap.openPositions.map((pos) => pos + 1).join(" & ");
+    const preview = trap.family.slice(0, 12);
+    const overflow = trap.family.length - preview.length;
+    const formulaId = `avoidedTrapFormula-${trap.stepIndex}-${index}`;
+    const highlightWord = (word) =>
+      word
+        .split("")
+        .map((letter, pos) => (trap.openPositions.includes(pos) ? `<b>${letter}</b>` : letter))
+        .join("");
+    const row = document.createElement("div");
+    row.className = "trap-row";
+    row.innerHTML = `
+      <div class="trap-row-head">
+        <b>✓ Avoided after guess ${String(trap.stepIndex + 1).padStart(2, "0")} · ${trap.guess}</b>
+        <span>${(trap.probability * 100).toFixed(1)}% branch risk</span>
+      </div>
+      <p class="trap-copy">
+        Another possible feedback outcome would have left a <b>${trap.familySize}-word</b>
+        family differing only at position${trap.openPositions.length > 1 ? "s" : ""}
+        <b>${posLabel}</b>. Your real feedback landed outside this branch.
+      </p>
+      <p class="trap-family">
+        ${preview.map(highlightWord).join(", ")}${overflow > 0 ? `, +${overflow} more` : ""}
+      </p>
+      <p class="trap-copy">
+        Had that branch occurred, it would have carried log₂(${trap.familySize}) ≈
+        ${Math.log2(trap.familySize).toFixed(2)} bits of identity uncertainty before the next guess.
+      </p>
+      <p class="deep-formula" id="${formulaId}-chance"></p>
+      <p class="deep-formula" id="${formulaId}-avoided"></p>
+    `;
+    body.appendChild(row);
+    renderFormula(
+      `${formulaId}-chance`,
+      `P(B \\mid S, ${trap.guess}) = \\dfrac{${trap.familySize}}{${trap.before}} = ${(trap.probability * 100).toFixed(1)}\\%`
+    );
+    renderFormula(
+      `${formulaId}-avoided`,
+      `f(${trap.guess}, \\text{answer}) \\ne B \\Rightarrow \\text{trap branch avoided}; \\quad H(\\text{answer} \\mid B)=\\log_2(${trap.familySize})=${Math.log2(trap.familySize).toFixed(2)}\\text{ bits}`
+    );
+  });
+}
+
 function openPositionsWord(n) {
   return n === 1 ? "one letter" : `${n} letters`;
 }
@@ -1087,6 +1189,10 @@ function renderFormulaReference() {
   formulaReferenceRendered = true;
 
   renderFormula("fPattern", `p_i = \\dfrac{n_i}{N}, \\quad \\sum_{i=1}^{243} n_i = N`);
+  renderFormula(
+    "fTrapBranch",
+    `P(B_j \\mid S, g) = \\dfrac{|B_j|}{|S|}, \\quad B_j = \\{w \\in S : f(g,w)=j\\}`
+  );
   renderFormula(
     "fEntropy",
     `H(\\text{guess}) = -\\sum_{i=1}^{243} p_i \\log_2 p_i`

@@ -66,6 +66,8 @@ node tests/core.test.js
 # Math citations
 [Claude Shannon](https://en.wikipedia.org/wiki/Claude_Shannon) - author of ["A Mathematical Theory of Communication"](https://people.math.harvard.edu/~ctm/home/text/others/shannon/entropy/entropy.pdf), the source of the entropy formula used throughout
 
+[Thomas M. Cover and Joy A. Thomas](https://doi.org/10.1002/047174882X) - *Elements of Information Theory* (2nd ed.), source for the conditional-probability and conditional-entropy framing used by the Traps Avoided analysis
+
 [3Blue1Brown](https://www.3blue1brown.com/) - ["Solving Wordle using information theory"](https://www.youtube.com/watch?v=v68zYyaEmEA), which popularized applying entropy to Wordle guesses
 
 [Kullback-Leibler divergence](https://en.wikipedia.org/wiki/Kullback%E2%80%93Leibler_divergence) - used to measure how far a guess's pattern distribution is from uniform
