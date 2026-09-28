@@ -124,5 +124,11 @@
     "solution": "sloop",
     "print_date": "2026-09-27",
     "days_since_launch": 1926
+  },
+  "2026-09-28": {
+    "id": 1336,
+    "solution": "trunk",
+    "print_date": "2026-09-28",
+    "days_since_launch": 1927
   }
 }
