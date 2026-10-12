@@ -208,5 +208,11 @@
     "solution": "uncap",
     "print_date": "2026-10-11",
     "days_since_launch": 1940
+  },
+  "2026-10-12": {
+    "id": 5014,
+    "solution": "yodel",
+    "print_date": "2026-10-12",
+    "days_since_launch": 1941
   }
 }
