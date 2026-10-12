@@ -284,11 +284,169 @@ function guessPartitionProfile(guess, candidates) {
   };
 }
 
-// Top-N guesses by a balanced information score. It averages win-bonus-adjusted
-// Shannon entropy with collision entropy, which directly rewards a lower expected
-// candidate count. Full dictionary widens the pool once candidates are small;
-// hardModeHistory restricts to Wordle Hard Mode.
-function findBestGuesses(candidates, topN = 5, hardModeHistory = null, fullDictionary = null) {
+// ---------------------------------------------------------------------------
+// Exact endgame search + opening book
+//
+// Why: one-step entropy is a *proxy* for the real objective, which is to
+// minimise the expected number of guesses (and, first of all, to never fail
+// inside six). Bertsimas & Paskov (2025, "An Exact Solution to Wordle",
+// Operations Research) solve the game exactly by dynamic programming and find
+// the proxy loses most of its ground in two places: the very first guess, and
+// small late-game pools where several look-alike words (BATCH/CATCH/HATCH...)
+// survive. Those are precisely the spots where lookahead is cheap, so:
+//
+//   1. Opening book. SALET is the provably optimal opener for the original
+//      answer list (Bertsimas & Paskov 2025; Cunanan & Thielscher, IJCAI 2023).
+//   2. Exact endgame. When few candidates remain, recursively search the
+//      feedback tree over {candidates} + {top-K information probes}, ranking by
+//      (a) probability of winning inside the guesses left, then
+//      (b) expected number of guesses. This is what lets Entrople choose a
+//      non-candidate "probe" word to split a swap family instead of guessing
+//      its members one by one.
+//
+// The search is bounded: it spends at most ENDGAME_OP_BUDGET feedback
+// evaluations and silently falls back to the entropy ranking if it runs out.
+// ---------------------------------------------------------------------------
+const OPENING_BOOK_WORD = "SALET";
+const OPENING_BOOK_MIN_POOL = 1000; // only "fresh board" pools, never a narrowed one
+const ENDGAME_MAX_CANDIDATES = 100;
+const ENDGAME_PROBE_COUNT = 40;
+const ENDGAME_OP_BUDGET = 2e6;
+const FAIL_COST = 10; // stand-in cost for a branch that cannot win inside the limit
+
+function betterExact(a, b) {
+  if (!b) return true;
+  if (a.pWin > b.pWin + 1e-12) return true;
+  if (a.pWin < b.pWin - 1e-12) return false;
+  return a.expected < b.expected - 1e-12;
+}
+
+function exactSolveNode(S, left, ctx, history) {
+  const n = S.length;
+  if (left <= 0) return { pWin: 0, expected: FAIL_COST };
+  if (n === 1) return { pWin: 1, expected: 1 };
+  if (n === 2) {
+    return left >= 2
+      ? { pWin: 1, expected: 1.5 }
+      : { pWin: 0.5, expected: 0.5 + 0.5 * FAIL_COST };
+  }
+  if (left === 1) {
+    return { pWin: 1 / n, expected: 1 / n + (1 - 1 / n) * FAIL_COST };
+  }
+
+  const key = left + "|" + S.join(",") + (ctx.hard ? "|" + history.map((h) => h.guess + h.code).join(";") : "");
+  const hit = ctx.memo.get(key);
+  if (hit) return hit;
+
+  let guesses = S;
+  if (ctx.probes.length) {
+    const constraints = ctx.hard && history.length ? buildHardModeConstraints(history) : null;
+    const inS = new Set(S);
+    const extra = [];
+    for (const probe of ctx.probes) {
+      if (inS.has(probe)) continue;
+      if (constraints && !isHardModeLegal(probe, constraints)) continue;
+      extra.push(probe);
+    }
+    guesses = S.concat(extra);
+  }
+
+  let best = null;
+  for (const g of guesses) {
+    const r = exactEvalGuess(g, S, left, ctx, history);
+    if (ctx.aborted) return { pWin: 0, expected: Infinity };
+    if (betterExact(r, best)) best = r;
+  }
+
+  ctx.memo.set(key, best);
+  return best;
+}
+
+function exactEvalGuess(guess, S, left, ctx, history) {
+  const n = S.length;
+  const buckets = new Map();
+  for (let i = 0; i < n; i++) {
+    const code = feedbackCode(guess, S[i]);
+    const list = buckets.get(code);
+    if (list) list.push(S[i]);
+    else buckets.set(code, [S[i]]);
+  }
+
+  ctx.ops += n;
+  if (ctx.ops > ctx.budget) {
+    ctx.aborted = true;
+    return { pWin: 0, expected: Infinity };
+  }
+
+  let pWin = 0;
+  let expected = 0;
+  for (const [code, bucket] of buckets) {
+    const p = bucket.length / n;
+    if (code === WIN_CODE) {
+      pWin += p;
+      expected += p;
+      continue;
+    }
+    if (bucket.length === n) return { pWin: 0, expected: Infinity }; // learns nothing
+    const nextHistory = ctx.hard ? history.concat([{ guess, code }]) : history;
+    const sub = exactSolveNode(bucket, left - 1, ctx, nextHistory);
+    if (ctx.aborted) return { pWin: 0, expected: Infinity };
+    pWin += p * sub.pWin;
+    expected += p * (1 + sub.expected);
+  }
+  return { pWin, expected };
+}
+
+// Ranks `rootGuesses` by exact (pWin, expected guesses) against `candidates`.
+// Returns null if the op budget is exhausted so the caller can fall back.
+function exactEndgameRank(candidates, rootGuesses, probes, guessesLeft, hardHistory) {
+  const ctx = {
+    memo: new Map(),
+    probes,
+    candidateSet: new Set(candidates),
+    hard: Array.isArray(hardHistory),
+    ops: 0,
+    budget: ENDGAME_OP_BUDGET,
+    aborted: false,
+  };
+  const history = Array.isArray(hardHistory) ? hardHistory : [];
+  const out = new Map();
+  for (const g of rootGuesses) {
+    const r = exactEvalGuess(g, candidates, guessesLeft, ctx, history);
+    if (ctx.aborted) return null;
+    out.set(g, r);
+  }
+  return out;
+}
+
+function compareRanked(a, b) {
+  return (
+    b.rankingScore - a.rankingScore ||
+    b.adjustedBits - a.adjustedBits ||
+    a.expectedRemaining - b.expectedRemaining
+  );
+}
+
+// Keeps `list` sorted by compareRanked and at most `cap` long. Ties keep their
+// insertion order (same stable behaviour as the old sort-after-every-push).
+function insertRanked(list, item, cap) {
+  if (list.length >= cap && compareRanked(item, list[list.length - 1]) >= 0) return;
+  let i = list.length;
+  while (i > 0 && compareRanked(item, list[i - 1]) < 0) i--;
+  list.splice(i, 0, item);
+  if (list.length > cap) list.pop();
+}
+
+// Top-N guesses. Stage 1 ranks the legal pool by the balanced information score
+// (win-bonus-adjusted Shannon entropy averaged with collision entropy). Stage 2
+// then refines it:
+//   - fresh board          -> opening book (SALET) is placed first
+//   - small candidate pool -> exact expected-guesses search over the
+//                             candidates + the best information probes
+// options: { guessesLeft = 6 }  guesses remaining *including* this one.
+// hardModeHistory restricts to Wordle Hard Mode (array, possibly empty).
+function findBestGuesses(candidates, topN = 5, hardModeHistory = null, fullDictionary = null, options = {}) {
+  const guessesLeft = options.guessesLeft === undefined ? 6 : options.guessesLeft;
   const useFullDictionary = candidates.length <= 500 && fullDictionary && fullDictionary.size > 0;
   const basePool = useFullDictionary
     ? new Set([...candidates, ...fullDictionary])
@@ -306,26 +464,96 @@ function findBestGuesses(candidates, topN = 5, hardModeHistory = null, fullDicti
     }
   }
 
-  let best = [];
-
-  for (const guess of pool) {
-    const profile = guessEntropy(guess, candidates);
-    best.push({ word: guess, ...profile });
-    best.sort(
-      (a, b) =>
-        b.rankingScore - a.rankingScore ||
-        b.adjustedBits - a.adjustedBits ||
-        a.expectedRemaining - b.expectedRemaining
-    );
-    if (best.length > topN) best.pop();
+  // On the very last guess only a live candidate can win, so a "probe" is
+  // worthless there no matter how much entropy it carries.
+  if (guessesLeft <= 1 && candidates.length > 0) {
+    const finalPool = new Set(candidates);
+    if (hardModeHistory && hardModeHistory.length) {
+      const constraints = buildHardModeConstraints(hardModeHistory);
+      for (const word of [...finalPool]) if (!isHardModeLegal(word, constraints)) finalPool.delete(word);
+    }
+    if (finalPool.size > 0) pool = finalPool;
   }
 
-  return {
-    searched: useFullDictionary ? "full dictionary" : "candidate pool",
-    top: best,
-    hardModeApplied,
-    poolSize: pool.size,
-  };
+  const wantsBook =
+    options.openingBook !== false &&
+    candidates.length >= OPENING_BOOK_MIN_POOL &&
+    (!hardModeHistory || hardModeHistory.length === 0) &&
+    fullDictionary && fullDictionary.has(OPENING_BOOK_WORD);
+
+  const wantsExact =
+    options.exactEndgame !== false &&
+    candidates.length > 1 &&
+    candidates.length <= ENDGAME_MAX_CANDIDATES &&
+    guessesLeft >= 2;
+
+  // The opening book makes a single-result request free: no scan of the pool.
+  if (wantsBook && topN === 1) {
+    const profile = guessEntropy(OPENING_BOOK_WORD, candidates);
+    return {
+      searched: "opening book",
+      top: [{ word: OPENING_BOOK_WORD, ...profile, method: "book" }],
+      hardModeApplied,
+      poolSize: pool.size,
+    };
+  }
+
+  const keep = wantsExact ? Math.max(topN, ENDGAME_PROBE_COUNT) : topN;
+  const best = [];
+  for (const guess of pool) {
+    insertRanked(best, { word: guess, ...guessEntropy(guess, candidates) }, keep);
+  }
+
+  let top = best.slice(0, topN).map((e) => ({ ...e, method: "entropy" }));
+  let searched = useFullDictionary ? "full dictionary" : "candidate pool";
+
+  if (wantsBook) {
+    const profile = guessEntropy(OPENING_BOOK_WORD, candidates);
+    top = [
+      { word: OPENING_BOOK_WORD, ...profile, method: "book" },
+      ...top.filter((e) => e.word !== OPENING_BOOK_WORD),
+    ].slice(0, topN);
+    searched = "opening book";
+  }
+
+  if (wantsExact) {
+    const candidateSet = new Set(candidates);
+    const probes = best.map((e) => e.word).filter((w) => !candidateSet.has(w));
+    const rootGuesses = [
+      ...candidates.filter((c) => pool.has(c)),
+      ...probes.filter((w) => pool.has(w)),
+    ];
+    const exact = exactEndgameRank(candidates, rootGuesses, probes, guessesLeft, hardModeHistory);
+
+    if (exact) {
+      const profiles = new Map(best.map((e) => [e.word, e]));
+      const ranked = rootGuesses
+        .map((word) => {
+          const r = exact.get(word);
+          const profile = profiles.get(word) || { word, ...guessEntropy(word, candidates) };
+          return {
+            ...profile,
+            method: "exact",
+            exactPWin: r.pWin > 1 - 1e-9 ? 1 : r.pWin, // snap float noise
+            exactExpected: r.expected,
+          };
+        })
+        .filter((e) => Number.isFinite(e.exactExpected))
+        .sort((a, b) => {
+          // Epsilon compare: sums of fractions leave ~1e-16 noise on pWin, which
+          // must never outrank a real difference in expected guesses.
+          if (Math.abs(a.exactPWin - b.exactPWin) > 1e-9) return b.exactPWin - a.exactPWin;
+          if (Math.abs(a.exactExpected - b.exactExpected) > 1e-9) return a.exactExpected - b.exactExpected;
+          return compareRanked(a, b);
+        });
+      if (ranked.length) {
+        top = ranked.slice(0, topN);
+        searched = "exact endgame search";
+      }
+    }
+  }
+
+  return { searched, top, hardModeApplied, poolSize: pool.size };
 }
 
 // Keeps only candidates consistent with the feedback a guess actually produced.

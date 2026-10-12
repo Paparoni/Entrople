@@ -40,24 +40,42 @@
     <section class="intro">
       <p class="eyebrow">SOLVE ANALYZER / 01</p>
       <h1>How good was your<br><span>Wordle, really?</span></h1>
-      <p class="lede">Enter the answer and your guesses. Entrople scores the solve against a live word pool, narrows the real candidate space guess by guess, and shows the entropy math behind your route, not just a summary.</p>
+      <p class="lede">Type the answer, then step through your guesses one at a time, locking each one in like a real Wordle board. Entrople scores the solve against a live word pool, narrows the real candidate space guess by guess, and shows the entropy math behind your route, not just a summary.</p>
     </section>
 
     <section class="workspace" aria-label="Wordle analyzer">
       <form id="analyzerForm" class="entry-panel">
         <div class="field-head">
           <div><span class="step">01</span><h2>Enter your solve</h2></div>
-          <button type="button" id="clearBtn" class="text-btn">CLEAR</button>
+          <div class="field-actions">
+            <button type="button" id="exampleBtn" class="text-btn">EXAMPLE</button>
+            <button type="button" id="undoBtn" class="text-btn">UNDO</button>
+            <button type="button" id="clearBtn" class="text-btn">CLEAR</button>
+          </div>
         </div>
 
-        <label for="answer">THE ANSWER</label>
-        <div class="answer-wrap"><input id="answer" name="answer" maxlength="5" value="BROTH" autocomplete="off" spellcheck="false" aria-describedby="answerHelp"><span>5 LETTERS</span></div>
-        <p id="answerHelp" class="hint">Used to calculate official Wordle-style feedback and to narrow the live candidate pool.</p>
+        <input id="answer" name="answer" type="hidden" value="">
 
-        <div class="guess-label"><label>YOUR GUESSES</label><span id="guessCount">3 / 6</span></div>
-        <div id="guessList" class="guess-list"></div>
-        <button type="button" id="addGuess" class="add-btn">＋ ADD ANOTHER GUESS</button>
-        <button type="submit" class="analyze-btn">ANALYZE MY SOLVE <span>→</span></button>
+        <div class="step-prompt">
+          <div>
+            <p class="step-kicker" id="stepKicker">STEP 1 OF 2</p>
+            <p class="step-title" id="stepTitle">Type the answer</p>
+          </div>
+          <span id="guessCount" class="step-count">ANSWER</span>
+        </div>
+        <p id="stepHelp" class="hint step-help">The word you were trying to find. Type it, then press ENTER to lock it in.</p>
+
+        <div id="stepBoard" class="step-board" aria-label="Solve entry board"></div>
+        <p id="stepStatus" class="step-status" aria-live="polite"></p>
+
+        <div id="stepHint" class="step-hint hidden">
+          <button type="button" id="hintBtn" class="text-btn">SHOW ENTROPLE'S PICK FOR THIS GUESS</button>
+          <p id="hintOut" class="step-hint-out" aria-live="polite"></p>
+        </div>
+
+        <div id="stepKeyboard" class="step-keyboard" aria-label="On-screen keyboard"></div>
+
+        <button type="submit" class="analyze-btn" id="analyzeBtn" disabled>ANALYZE MY SOLVE <span>→</span></button>
         <p id="error" class="error" role="alert"></p>
       </form>
 
@@ -137,7 +155,7 @@
 
         <article class="math-card solve-card" id="solveCard">
           <div class="math-title"><p>HOW ENTROPLE WOULD SOLVE</p><span>BALANCED INFORMATION ROUTE</span></div>
-          <p class="deep-intro">Set your actual guesses aside. This is the route Entrople's balanced information search takes on its own: every guess maximizes an equal blend of win-bonus-adjusted Shannon entropy and expected candidate reduction, narrowed guess by guess by the real feedback this answer produces.</p>
+          <p class="deep-intro">Set your actual guesses aside. This is the route Entrople's balanced information search takes on its own: it opens with the optimal opening-book word, ranks mid-game guesses by an equal blend of win-bonus-adjusted Shannon entropy and expected candidate reduction, and switches to an exact expected-guesses search once the pool is small, narrowed guess by guess by the real feedback this answer produces.</p>
           <div id="solveBoard" class="solve-board" aria-label="Entrople's own solve, animated"></div>
           <div id="solveSteps" class="solve-steps"></div>
           <p id="solveSummary" class="solve-summary"></p>
@@ -172,6 +190,8 @@
             <li><span>Aladaileh, T., Stephens, D., Alqaisi, M., &amp; Wu, C.</span> (2026). <em>Solving Wordle Using Information Theory.</em> Northeast Journal of Complex Systems, 8(1), Article 6. <a href="https://doi.org/10.63562/2577-8439.1146" target="_blank" rel="noopener">doi.org/10.63562/2577-8439.1146</a>. Entropy-based guess selection applied specifically to Wordle, the basis for Entrople's "best guess" search.</li>
             <li><span>Mishra, N.</span> (2024). <em>Using Information Theory to Play Wordle as Optimally as Possible.</em> NHSJS. <a href="https://nhsjs.com/?p=12299" target="_blank" rel="noopener">nhsjs.com/?p=12299</a>. Worked derivation of expected-information guess ranking that Entrople's entropy search follows.</li>
             <li><span>Healy, A. D.</span> (2022). <em>On Optimal Strategies for Wordle.</em> <a href="http://www.alexhealy.net/papers/wordle.pdf" target="_blank" rel="noopener">alexhealy.net/papers/wordle.pdf</a>. Source of the win-bonus correction Entrople's best-guess ranking uses: assigning the all-green outcome a value of −1 bit (rather than the 0 a singleton bucket would otherwise get) so a guess that can win outright is never just tied with an equally-splitting guess that can't.</li>
+            <li><span>Bertsimas, D. &amp; Paskov, A.</span> (2025). <em>An Exact Solution to Wordle.</em> Operations Research. <a href="https://pubsonline.informs.org/doi/10.1287/opre.2022.0434" target="_blank" rel="noopener">doi.org/10.1287/opre.2022.0434</a>. Dynamic-programming solution that minimizes <em>expected guesses</em> rather than entropy; source of the SALET opening-book pick and the case for exact lookahead in small pools.</li>
+            <li><span>Cunanan, M. &amp; Thielscher, M.</span> (2023). <em>On Optimal Strategies for Wordle and General Guessing Games.</em> IJCAI 2023. <a href="https://arxiv.org/abs/2305.09111" target="_blank" rel="noopener">arxiv.org/abs/2305.09111</a>. Independent proof that SALET is the optimal first guess, using lower-bound pruning instead of exhaustive search.</li>
           </ol>
         </div>
       </section>
@@ -213,7 +233,7 @@
           <div class="spoiler-content" id="todaySpoilerContent">
             <article class="math-card solve-card" id="todaySolveCard">
               <div class="math-title"><p>HOW ENTROPLE SOLVED IT</p><span>BALANCED INFORMATION ROUTE</span></div>
-              <p class="deep-intro">This is the exact route Entrople's balanced information search took, completely unassisted: every guess maximizes an equal blend of win-bonus-adjusted entropy and expected candidate reduction against the live candidate pool.</p>
+              <p class="deep-intro">This is the exact route Entrople's balanced information search took, completely unassisted: it opens with the optimal opening-book word, ranks mid-game guesses by an equal blend of win-bonus-adjusted entropy and expected candidate reduction, and switches to an exact expected-guesses search once the live candidate pool is small.</p>
               <div id="todaySolveBoard" class="solve-board" aria-label="Entrople's live solve of today's Wordle, animated"></div>
               <div id="todaySolveSteps" class="solve-steps"></div>
               <p id="todaySolveSummary" class="solve-summary"></p>

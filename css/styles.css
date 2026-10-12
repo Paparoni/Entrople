@@ -251,3 +251,43 @@
 
 @media(max-width:900px){.intro{grid-template-columns:1fr;gap:26px}.workspace{grid-template-columns:1fr}.entry-panel{position:static}.intro h1{font-size:59px}}
 @media(max-width:580px){.topbar{height:60px}.method{display:none}main{padding:48px 15px}.intro{margin-bottom:35px}.intro h1{font-size:45px}.entry-panel,.results{padding:19px}.metric-grid{grid-template-columns:1fr 1fr}.metric:nth-child(2){border-right:0}.metric:nth-child(-n+2){border-bottom:1px solid var(--line)}.tile{width:46px;height:46px}.equation{grid-template-columns:1fr;gap:8px}.route-line{grid-template-columns:24px 65px 1fr}.route-line .score{display:none}.deep-stats{grid-template-columns:1fr}footer{flex-direction:column;gap:8px}.solve-board .tile{width:36px;height:36px;font-size:14px}.solve-step-line{grid-template-columns:24px 65px 1fr}.solve-step-line .score{display:none}.tabbar{padding:0 15px}.tab-btn{padding:14px 14px;font-size:10px}.sim-opener-head{grid-template-columns:14px auto 1fr;grid-template-rows:auto auto}.sim-opener-head .sim-opener-tag{grid-column:1/-1;justify-self:start;margin-top:4px}}
+
+/* --- Step-through entry board --- */
+.field-actions{display:flex;gap:14px;align-items:center}
+.field-actions .text-btn:disabled{opacity:.35;cursor:default}
+.step-prompt{display:flex;justify-content:space-between;align-items:flex-end;margin:26px 0 0}
+.step-kicker{font:500 10px DM Mono,monospace;letter-spacing:.13em;color:var(--orange);margin:0 0 6px}
+.step-title{font-size:21px;font-weight:800;letter-spacing:-.04em;margin:0}
+.step-count{font:500 11px DM Mono,monospace;color:#6c6e68;letter-spacing:.08em}
+.step-help{margin:8px 0 18px}
+.step-board{display:flex;flex-direction:column;gap:6px;align-items:center;margin:0 0 12px}
+.step-row{display:flex;gap:6px}
+.step-tile{width:52px;height:52px;display:grid;place-items:center;border:2px solid var(--line);background:#fff;font:800 22px Manrope,Arial,sans-serif;color:var(--ink);text-transform:uppercase}
+.step-tile.filled{border-color:#8d8f86;animation:stepPop .1s ease-out}
+.step-tile.correct{background:var(--green);border-color:var(--green);color:#fff}
+.step-tile.present{background:var(--yellow);border-color:var(--yellow);color:#fff}
+.step-tile.absent{background:var(--gray);border-color:var(--gray);color:#fff}
+.step-board.answer-stage .step-tile.filled{border-color:var(--ink)}
+.step-row.reveal .step-tile{animation:stepFlip .55s ease both;animation-delay:var(--flip-delay,0ms)}
+.step-row.shake{animation:stepShake .4s}
+.step-status{min-height:16px;margin:0 0 4px;font:500 11px DM Mono,monospace;color:#3f6b4d;text-align:center}
+.step-hint{margin:6px 0 14px;text-align:center}
+.step-hint-out{font-size:11px;line-height:1.5;color:#54564f;margin:8px 0 0}
+.step-hint-out b{font-family:DM Mono,monospace;letter-spacing:.1em;color:var(--blue)}
+.step-hint-out span{color:#8a8c84}
+.step-keyboard{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.key-row{display:flex;gap:5px;justify-content:center}
+.key{flex:1 1 0;max-width:34px;min-width:0;height:46px;border:0;border-radius:4px;background:#dcdbd0;color:var(--ink);font:700 13px Manrope,Arial,sans-serif;cursor:pointer;padding:0;user-select:none;-webkit-tap-highlight-color:transparent}
+.key.wide{flex:1.6 1 0;max-width:54px;font-size:10px;letter-spacing:.02em}
+.key:hover{background:#cfcec2}
+.key:active{transform:scale(.95)}
+.key.correct{background:var(--green);color:#fff}
+.key.present{background:var(--yellow);color:#fff}
+.key.absent{background:var(--gray);color:#fff;opacity:.75}
+.analyze-btn:disabled{opacity:.4;cursor:not-allowed}
+.analyze-btn:disabled:hover{background:var(--ink)}
+@keyframes stepPop{50%{transform:scale(1.08)}}
+@keyframes stepFlip{0%{transform:rotateX(0)}45%{transform:rotateX(90deg)}55%{transform:rotateX(90deg)}100%{transform:rotateX(0)}}
+@keyframes stepShake{10%,90%{transform:translateX(-2px)}20%,80%{transform:translateX(4px)}30%,50%,70%{transform:translateX(-6px)}40%,60%{transform:translateX(6px)}}
+@media(max-width:580px){.step-tile{width:46px;height:46px;font-size:20px}.key{height:42px}}
+@media(prefers-reduced-motion:reduce){.step-row.reveal .step-tile,.step-row.shake,.step-tile.filled{animation:none}}

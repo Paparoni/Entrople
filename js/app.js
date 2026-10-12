@@ -209,10 +209,12 @@ function renderDataStatus() {
 
 /* UI wiring */
 const answerEl = document.querySelector("#answer");
-const guessList = document.querySelector("#guessList");
+const stepBoard = document.querySelector("#stepBoard");
 const form = document.querySelector("#analyzerForm");
 
-let guesses = ["ADIEU", "SHORT", "BROTH"];
+// `guesses` is what analyze() reads; the stepper below keeps it in sync with
+// the rows the user has locked in.
+let guesses = [];
 let analyzerRevision = 0;
 let definitionRevision = 0;
 
@@ -227,50 +229,359 @@ function escapeHtml(value) {
   );
 }
 
-function renderInputs() {
-  guessList.innerHTML = "";
+/* ---------------------------------------------------------------------- */
+/* Step-through entry                                                      */
+/* ---------------------------------------------------------------------- */
+// Two stages, one board, like playing the real game:
+//   "answer": type the answer, ENTER locks it in
+//   "guess":  type guess N, ENTER reveals its colours (computed from the
+//             answer) and shows how far the live candidate pool just narrowed
+const KEY_ROWS = [
+  "QWERTYUIOP".split(""),
+  "ASDFGHJKL".split(""),
+  ["ENTER", ..."ZXCVBNM".split(""), "BACK"],
+];
+const KEY_RANK = { absent: 1, present: 2, correct: 3 };
 
-  guesses.forEach((guess, index) => {
-    const row = document.createElement("div");
-    row.className = "guess-row";
+// Flips true on the first thing the person does, so the slow word-list fetch
+// finishing later never overwrites a board they've already started on.
+let stepperTouched = false;
 
-    row.innerHTML = `
-      <span class="guess-num">${String(index + 1).padStart(2, "0")}</span>
+const stepper = {
+  stage: "answer", // "answer" | "guess"
+  answer: "",
+  rows: [], // locked-in guesses
+  pools: [], // candidate-pool size after each locked-in guess
+  current: "", // letters being typed
+  justRevealed: -1, // row index that should play its flip animation once
+};
 
-      <input
-        class="guess-input"
-        value="${guess}"
-        maxlength="5"
-        aria-label="Guess ${index + 1}"
-        autocomplete="off"
-        spellcheck="false"
-      >
+function stepperDone() {
+  if (stepper.stage !== "guess") return false;
+  const last = stepper.rows[stepper.rows.length - 1];
+  return stepper.rows.length >= 6 || last === stepper.answer;
+}
 
-      <button
-        class="remove"
-        type="button"
-        aria-label="Remove guess ${index + 1}"
-      >×</button>
-    `;
+// Candidate pool after the first `count` rows, from the live answer list.
+function stepperPoolAfter(count) {
+  if (words.status !== "ready") return null;
+  let pool = seedCandidatePool(words.answers, stepper.answer, words.guesses);
+  for (let i = 0; i < count; i++) {
+    pool = narrowCandidates(pool, stepper.rows[i], feedbackCode(stepper.rows[i], stepper.answer));
+  }
+  return pool;
+}
 
-    const input = row.querySelector("input");
+function syncStepperToForm() {
+  answerEl.value = stepper.answer;
+  guesses = stepper.rows.slice();
+}
 
-    input.addEventListener("input", (event) => {
-      event.target.value = clean(event.target.value);
-      guesses[index] = event.target.value;
+function stepperKeyStates() {
+  const states = {};
+  if (stepper.stage !== "guess") return states;
+  stepper.rows.forEach((guess) => {
+    const marks = feedback(guess, stepper.answer);
+    guess.split("").forEach((letter, i) => {
+      if ((KEY_RANK[marks[i]] || 0) > (KEY_RANK[states[letter]] || 0)) states[letter] = marks[i];
     });
+  });
+  return states;
+}
 
-    row.querySelector(".remove").addEventListener("click", () => {
-      guesses.splice(index, 1);
-      if (!guesses.length) guesses.push("");
-      renderInputs();
-    });
+function buildTileRow(letters, marks, extraClass) {
+  const row = document.createElement("div");
+  row.className = `step-row${extraClass ? " " + extraClass : ""}`;
+  for (let i = 0; i < 5; i++) {
+    const tile = document.createElement("span");
+    const letter = letters[i] || "";
+    tile.className = "step-tile" + (letter ? " filled" : "") + (marks ? ` ${marks[i]}` : "");
+    tile.textContent = letter;
+    if (marks && extraClass === "reveal") tile.style.setProperty("--flip-delay", `${i * 130}ms`);
+    row.appendChild(tile);
+  }
+  return row;
+}
 
-    guessList.appendChild(row);
+function renderStepper() {
+  const inAnswer = stepper.stage === "answer";
+  const done = stepperDone();
+  const currentIndex = stepper.rows.length;
+
+  stepBoard.innerHTML = "";
+  stepBoard.classList.toggle("answer-stage", inAnswer);
+
+  if (inAnswer) {
+    stepBoard.appendChild(buildTileRow(stepper.current, null, "answer-row typing"));
+  } else {
+    for (let r = 0; r < 6; r++) {
+      if (r < stepper.rows.length) {
+        const reveal = r === stepper.justRevealed;
+        stepBoard.appendChild(
+          buildTileRow(stepper.rows[r], feedback(stepper.rows[r], stepper.answer), reveal ? "reveal" : "")
+        );
+      } else if (r === currentIndex && !done) {
+        stepBoard.appendChild(buildTileRow(stepper.current, null, "typing"));
+      } else {
+        stepBoard.appendChild(buildTileRow("", null, ""));
+      }
+    }
+  }
+  stepper.justRevealed = -1;
+
+  // Prompt copy
+  const kicker = document.querySelector("#stepKicker");
+  const title = document.querySelector("#stepTitle");
+  const help = document.querySelector("#stepHelp");
+  const count = document.querySelector("#guessCount");
+  const status = document.querySelector("#stepStatus");
+
+  if (inAnswer) {
+    kicker.textContent = "STEP 1 OF 2";
+    title.textContent = "Type the answer";
+    help.textContent = "The word you were trying to find. Type it, then press ENTER to lock it in.";
+    count.textContent = "ANSWER";
+    status.textContent = "";
+  } else if (done) {
+    const solved = stepper.rows[stepper.rows.length - 1] === stepper.answer;
+    kicker.textContent = "SOLVE LOCKED IN";
+    title.textContent = solved ? `Solved in ${stepper.rows.length}` : "Out of guesses";
+    help.textContent = "Press ENTER or the button below to analyze it. UNDO steps back one guess.";
+    count.textContent = `${stepper.rows.length} / 6`;
+  } else {
+    kicker.textContent = "STEP 2 OF 2";
+    title.textContent = `Guess ${currentIndex + 1} of 6`;
+    help.textContent = "Type the guess you played and press ENTER. Its colours are worked out from the answer.";
+    count.textContent = `${currentIndex} / 6`;
+  }
+
+  if (!inAnswer && stepper.rows.length) {
+    const before = stepper.rows.length === 1 ? words.answers.length : stepper.pools[stepper.rows.length - 2];
+    const after = stepper.pools[stepper.rows.length - 1];
+    status.textContent =
+      after === undefined || before === undefined || words.status !== "ready"
+        ? ""
+        : `${stepper.rows[stepper.rows.length - 1]}: ${before.toLocaleString()} → ${after.toLocaleString()} possible ${
+            after === 1 ? "answer" : "answers"
+          } left`;
+  }
+
+  // Entrople's pick (only while there is still a guess to make)
+  const hintWrap = document.querySelector("#stepHint");
+  hintWrap.classList.toggle("hidden", inAnswer || done || words.status !== "ready");
+  document.querySelector("#hintOut").textContent = "";
+
+  // Keyboard colours
+  const states = stepperKeyStates();
+  document.querySelectorAll("#stepKeyboard .key").forEach((key) => {
+    const letter = key.dataset.key;
+    key.classList.remove("correct", "present", "absent");
+    if (states[letter]) key.classList.add(states[letter]);
   });
 
-  document.querySelector("#guessCount").textContent = `${guesses.length} / 6`;
-  document.querySelector("#addGuess").disabled = guesses.length >= 6;
+  document.querySelector("#analyzeBtn").disabled = !(stepper.stage === "guess" && stepper.rows.length > 0);
+  document.querySelector("#undoBtn").disabled = inAnswer && !stepper.current;
+}
+
+function buildKeyboard() {
+  const kb = document.querySelector("#stepKeyboard");
+  kb.innerHTML = "";
+  KEY_ROWS.forEach((row) => {
+    const rowEl = document.createElement("div");
+    rowEl.className = "key-row";
+    row.forEach((k) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.tabIndex = -1;
+      btn.className = "key" + (k === "ENTER" || k === "BACK" ? " wide" : "");
+      btn.dataset.key = k;
+      btn.textContent = k === "BACK" ? "⌫" : k;
+      btn.setAttribute("aria-label", k === "BACK" ? "Backspace" : k === "ENTER" ? "Enter" : k);
+      // Keep focus off the on-screen keys so a real Enter keypress never
+      // double-fires a focused button.
+      btn.addEventListener("mousedown", (e) => e.preventDefault());
+      btn.addEventListener("click", () => pressKey(k));
+      rowEl.appendChild(btn);
+    });
+    kb.appendChild(rowEl);
+  });
+}
+
+function setStepError(message) {
+  document.querySelector("#error").textContent = message || "";
+}
+
+function shakeCurrentRow() {
+  const row = stepBoard.querySelector(".typing");
+  if (!row) return;
+  row.classList.remove("shake");
+  void row.offsetWidth; // restart the animation
+  row.classList.add("shake");
+}
+
+function updateTypingRow() {
+  const row = stepBoard.querySelector(".typing");
+  if (!row) return renderStepper();
+  [...row.children].forEach((tile, i) => {
+    const letter = stepper.current[i] || "";
+    tile.textContent = letter;
+    tile.classList.toggle("filled", Boolean(letter));
+  });
+  document.querySelector("#undoBtn").disabled = stepper.stage === "answer" && !stepper.current;
+}
+
+function submitStepperWord() {
+  const word = stepper.current;
+  if (word.length < 5) {
+    setStepError("Not enough letters.");
+    shakeCurrentRow();
+    return;
+  }
+  if (words.status === "ready" && !words.guesses.has(word)) {
+    setStepError(`${word} isn't in the Wordle word list.`);
+    shakeCurrentRow();
+    return;
+  }
+  setStepError("");
+
+  if (stepper.stage === "answer") {
+    stepper.answer = word;
+    stepper.stage = "guess";
+    stepper.current = "";
+  } else {
+    stepper.rows.push(word);
+    const pool = stepperPoolAfter(stepper.rows.length);
+    stepper.pools.push(pool ? pool.length : undefined);
+    stepper.justRevealed = stepper.rows.length - 1;
+    stepper.current = "";
+  }
+  syncStepperToForm();
+  renderStepper();
+}
+
+function pressKey(key) {
+  stepperTouched = true;
+  if (key === "ENTER") {
+    if (stepperDone()) return analyze();
+    return submitStepperWord();
+  }
+
+  if (stepperDone()) return;
+  setStepError("");
+
+  if (key === "BACK") {
+    stepper.current = stepper.current.slice(0, -1);
+  } else if (/^[A-Z]$/.test(key) && stepper.current.length < 5) {
+    stepper.current += key;
+  } else {
+    return;
+  }
+  updateTypingRow();
+}
+
+function undoStep() {
+  stepperTouched = true;
+  setStepError("");
+  if (stepper.stage === "answer") {
+    stepper.current = "";
+  } else if (stepper.rows.length) {
+    stepper.rows.pop();
+    stepper.pools.pop();
+    stepper.current = "";
+  } else {
+    // Back to editing the answer.
+    stepper.stage = "answer";
+    stepper.current = stepper.answer;
+    stepper.answer = "";
+  }
+  syncStepperToForm();
+  renderStepper();
+}
+
+function resetStepper() {
+  stepperTouched = true;
+  stepper.stage = "answer";
+  stepper.answer = "";
+  stepper.rows = [];
+  stepper.pools = [];
+  stepper.current = "";
+  stepper.justRevealed = -1;
+  setStepError("");
+  syncStepperToForm();
+  renderStepper();
+}
+
+function loadExampleSolve() {
+  stepper.stage = "guess";
+  stepper.answer = "BROTH";
+  stepper.rows = ["ADIEU", "SHORT", "BROTH"];
+  stepper.current = "";
+  stepper.justRevealed = -1;
+  stepper.pools = stepper.rows.map((_, i) => {
+    const pool = stepperPoolAfter(i + 1);
+    return pool ? pool.length : undefined;
+  });
+  setStepError("");
+  syncStepperToForm();
+  renderStepper();
+}
+
+// Entrople's own pick for the guess currently being typed.
+function showEntroplePick() {
+  const out = document.querySelector("#hintOut");
+  if (words.status !== "ready" || stepper.stage !== "guess" || stepperDone()) return;
+  out.textContent = "Thinking…";
+  setTimeout(() => {
+    const candidates = stepperPoolAfter(stepper.rows.length);
+    if (!candidates || !candidates.length) {
+      out.textContent = "No tracked candidates match every clue so far, so there's no pick to show.";
+      return;
+    }
+    const history = stepper.rows.map((guess) => ({ guess, code: feedbackCode(guess, stepper.answer) }));
+    const best = findBestGuesses(
+      candidates,
+      1,
+      solveMode === "hard" ? history : null,
+      words.guesses,
+      { guessesLeft: 6 - stepper.rows.length }
+    );
+    const pick = best.top[0];
+    const how =
+      pick.method === "book"
+        ? "opening book"
+        : pick.method === "exact"
+        ? `exact search · ${pick.exactExpected.toFixed(2)} expected guesses`
+        : `${pick.bits.toFixed(2)} bits of entropy`;
+    out.innerHTML = `Entrople would play <b>${pick.word}</b> <span>(${how}; ${candidates.length.toLocaleString()} ${
+      candidates.length === 1 ? "answer" : "answers"
+    } left)</span>`;
+  }, 20);
+}
+
+// Physical keyboard: only while the analyzer tab is showing and the person
+// isn't typing in another tab's text field.
+document.addEventListener("keydown", (event) => {
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  if (document.querySelector("#panel-analyzer").classList.contains("hidden")) return;
+  const target = event.target;
+  if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+  if (target && target.isContentEditable) return;
+
+  if (event.key === "Enter") {
+    // A focused button should keep its own Enter behaviour.
+    if (target && /^(BUTTON|A)$/.test(target.tagName)) return;
+    event.preventDefault();
+    pressKey("ENTER");
+  } else if (event.key === "Backspace") {
+    event.preventDefault();
+    pressKey("BACK");
+  } else if (/^[a-zA-Z]$/.test(event.key)) {
+    pressKey(event.key.toUpperCase());
+  }
+});
+
+function renderInputs() {
+  renderStepper();
 }
 
 function wordSet(word) {
@@ -480,6 +791,20 @@ function analyze() {
   document.querySelector("#results").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+// One plain-English sentence on *how* a best guess was chosen, so the UI never
+// claims "highest entropy" for a pick that came from the opening book or the
+// exact expected-guesses search.
+function methodSentence(entry) {
+  if (!entry) return "";
+  if (entry.method === "book") {
+    return `Chosen from the opening book: SALET is the provably optimal first guess for the original Wordle answer list (Bertsimas & Paskov, 2025; Cunanan & Thielscher, 2023).`;
+  }
+  if (entry.method === "exact") {
+    return `Chosen by exact search over the remaining feedback tree: ${(entry.exactPWin * 100).toFixed(1)}% chance to finish inside the guesses left, ${entry.exactExpected.toFixed(3)} expected guesses from this point. Unlike entropy alone, this can prefer a non-answer probe that cleanly splits a family of look-alike words.`;
+  }
+  return "";
+}
+
 function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed, revision) {
   const deepCard = document.querySelector("#deepCard");
   const deepBody = document.querySelector("#deepBody");
@@ -522,7 +847,7 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed, revisio
     // NaN stats (and a NaN grade) for the rest of the solve.
     let answerMissingFromPool = false;
 
-    evaluatedGuesses.forEach((guess) => {
+    evaluatedGuesses.forEach((guess, stepIndex) => {
       const beforeCandidates = candidates;
       const before = candidates.length;
       const actualCode = feedbackCode(guess, answer);
@@ -532,7 +857,8 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed, revisio
         candidates,
         5,
         solveMode === "hard" ? hardHistory : null,
-        words.guesses
+        words.guesses,
+        { guessesLeft: 6 - stepIndex }
       );
 
       // Only clues from guesses played before this one apply.
@@ -641,12 +967,13 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed, revisio
         <p class="deep-formula" id="${formulaId}-kl"></p>
         <p class="deep-formula" id="${formulaId}-win"></p>
         <p class="deep-note">
-          Best guess found for this step (searched ${step.best.hardModeApplied ? `${step.best.poolSize.toLocaleString()} legal words` : step.best.searched}):
+          Best guess found for this step (${step.best.hardModeApplied ? `${step.best.poolSize.toLocaleString()} legal words, ` : ""}${step.best.searched}):
           <b>${bestGuess.word}</b> at ${fmtBits(bestGuess.rankingScore)} balanced score (${fmtBits(bestGuess.bits)} entropy; expected ${bestGuess.expectedRemaining.toFixed(1)} candidates left)${
         bestGuess.pWin > 0
           ? `, win-bonus adjusted to ${fmtBits(bestGuess.adjustedBits)} (${(bestGuess.pWin * 100).toFixed(1)}% chance this guess IS the answer)`
           : " (not itself a possible answer, so no win-bonus applies)"
       }. ${rankLabel}
+          ${methodSentence(bestGuess)}
           Its largest single bucket holds ${bestProfile.maxBucket.toLocaleString()}
           candidates (mean bucket size across ${bestProfile.bucketsUsed} realized patterns is
           ${bestProfile.mean.toFixed(1)}).
@@ -665,6 +992,12 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed, revisio
                 const topProfile = bestProfile;
                 const gapFromTop =
                   ci === 0 ? 0 : step.best.top[0].rankingScore - cand.rankingScore;
+                const exactTag =
+                  cand.method === "exact"
+                    ? ` Exact search: ${(cand.exactPWin * 100).toFixed(1)}% to win inside the guesses left, ${cand.exactExpected.toFixed(3)} expected guesses from here.`
+                    : cand.method === "book"
+                    ? " Opening book pick."
+                    : "";
                 const commonness = englishCommonnessTier(cand.word);
                 const priorLetters = evaluatedGuesses.slice(0, i).join("");
                 const candVowels = vowelsIn(cand.word);
@@ -683,13 +1016,13 @@ function renderDeepMath(evaluatedGuesses, answer, solvedAt, guessesUsed, revisio
                     : "";
                 let why;
                 if (ci === 0) {
-                  why = `Highest balanced score of the ${step.best.hardModeApplied ? `${step.best.poolSize.toLocaleString()} legal words` : `${step.best.searched} searched`}: ${fmtBits(candProfile.adjustedBits)} win-adjusted entropy and ${fmtBits(candProfile.candidateReductionBits)} candidate-reduction information, leaving ${candProfile.expectedRemaining.toFixed(1)} candidates on average. Its worst case is ${candProfile.maxBucket.toLocaleString()} words (${((candProfile.maxBucket / step.before) * 100).toFixed(1)}%). Vowel-wise, it ${vowelNote}.${winNote}`;
+                  why = `Highest balanced score of the ${step.best.hardModeApplied ? `${step.best.poolSize.toLocaleString()} legal words` : `${step.best.searched} searched`}: ${fmtBits(candProfile.adjustedBits)} win-adjusted entropy and ${fmtBits(candProfile.candidateReductionBits)} candidate-reduction information, leaving ${candProfile.expectedRemaining.toFixed(1)} candidates on average. Its worst case is ${candProfile.maxBucket.toLocaleString()} words (${((candProfile.maxBucket / step.before) * 100).toFixed(1)}%). Vowel-wise, it ${vowelNote}.${winNote}${exactTag}`;
                 } else {
-                  why = `${fmtBits(gapFromTop)} behind the top balanced score. It leaves ${candProfile.expectedRemaining.toFixed(1)} candidates on average (worst case ${candProfile.maxBucket.toLocaleString()}), and splits into ${candProfile.bucketsUsed} outcomes, ${
+                  why = `${cand.method === "exact" ? "Ranked below the top pick by exact expected guesses." : `${fmtBits(gapFromTop)} behind the top balanced score.`} It leaves ${candProfile.expectedRemaining.toFixed(1)} candidates on average (worst case ${candProfile.maxBucket.toLocaleString()}), and splits into ${candProfile.bucketsUsed} outcomes, ${
                     candProfile.bucketsUsed >= topProfile.bucketsUsed
                       ? "about as even a split as the top pick"
                       : "a somewhat less even split than the top pick"
-                  }. It ${vowelNote}.${winNote}`;
+                  }. It ${vowelNote}.${winNote}${exactTag}`;
                 }
                 return `
                   <div class="next-best-row${isPlayed ? " played" : ""}">
@@ -1510,24 +1843,22 @@ function triggerSolveAnimation(ids) {
 }
 
 /* Event wiring */
-answerEl.addEventListener("input", (event) => {
-  event.target.value = clean(event.target.value);
-});
-
-document.querySelector("#addGuess").addEventListener("click", () => {
-  if (guesses.length < 6) {
-    guesses.push("");
-    renderInputs();
-    guessList.lastElementChild.querySelector("input").focus();
-  }
-});
-
-document.querySelector("#clearBtn").addEventListener("click", () => {
-  answerEl.value = "";
-  guesses = [""];
-  renderInputs();
-  answerEl.focus();
-});
+// Mouse clicks hand focus back to the page so the next ENTER locks in the word
+// being typed instead of re-firing the button that was just clicked. (Keyboard
+// users who Tab onto a button still get its native Enter behaviour.)
+function onStepControl(handler) {
+  return (event) => {
+    if (event.detail > 0 && event.currentTarget) event.currentTarget.blur();
+    handler();
+  };
+}
+document.querySelector("#undoBtn").addEventListener("click", onStepControl(undoStep));
+document.querySelector("#exampleBtn").addEventListener("click", onStepControl(() => {
+  stepperTouched = true;
+  loadExampleSolve();
+}));
+document.querySelector("#hintBtn").addEventListener("click", onStepControl(showEntroplePick));
+document.querySelector("#clearBtn").addEventListener("click", onStepControl(resetStepper));
 
 form.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -1564,7 +1895,7 @@ document.querySelectorAll("#modeHard, #modeEasy").forEach((btn) => {
     document
       .querySelectorAll("#modeHard, #modeEasy")
       .forEach((b) => b.classList.toggle("active", b.dataset.mode === solveMode));
-    analyze();
+    if (analyzerRevision > 0 && stepper.stage === "guess" && stepper.rows.length) analyze();
     if (cachedTodaySolve) {
       const request = ++todayRequestRevision;
       stopTodaySolveWorker();
@@ -2814,10 +3145,24 @@ document.querySelector("#todaySolveReplay").addEventListener("click", () => {
   triggerSolveAnimation(SOLVE_IDS.today);
 });
 
-renderInputs();
 renderDataStatus();
+// Start with the example solve locked in and analyzed, same as before; CLEAR
+// (or UNDO) hands the board back for a fresh step-through.
+buildKeyboard();
+loadExampleSolve();
 loadWordData().then(() => {
-  analyze();
+  if (!stepperTouched) {
+    loadExampleSolve(); // recompute pool sizes now that the word lists exist
+    analyze();
+  } else if (stepper.stage === "guess") {
+    stepper.pools = stepper.rows.map((_, i) => {
+      const pool = stepperPoolAfter(i + 1);
+      return pool ? pool.length : undefined;
+    });
+    renderStepper();
+  } else {
+    renderStepper();
+  }
   updateSimControls();
 });
 analyze();

@@ -55,6 +55,25 @@ At each step of a solve, Entrople searches either the narrowed candidate pool or
 
 p_win is nonzero only when the guess is itself still a live candidate (it's the fraction of the pool, 1/N, that the guess's own all-green GGGGG bucket represents). This falls directly out of Healy's derivation: he shows that assigning the all-green outcome a value of -1 bit, instead of the 0 a same-sized bucket would otherwise contribute, is algebraically equivalent to adding p_win to the guess's ordinary entropy. Entrople combines that adjusted entropy with candidate-reduction information for its Top 5 rankings and auto-solve, so an immediate win and a lower expected posterior pool both count.
 
+## Opening book and exact endgame
+One-step entropy is a proxy. The real objective is to **minimize expected guesses** (and never fail inside six), which Bertsimas & Paskov (2025) solve exactly by dynamic programming and Cunanan & Thielscher (2023) confirm with an independent optimality proof. Both land on **SALET** as the best opener, and both show the entropy proxy loses the most ground on small late-game pools full of look-alike words (`BATCH / CATCH / HATCH / MATCH / WATCH…`). Entrople now adds these corrections on top of the balanced ranking:
+
+- **Opening book.** On a fresh board (pool of 1,000+ words, no Hard Mode history), SALET is placed first. It is skipped automatically if SALET isn't a legal guess in the loaded dictionary.
+- **Exact endgame.** When 100 or fewer candidates remain and at least two guesses are left, Entrople searches the feedback tree over every remaining candidate plus the 40 best information probes, ranking by (1) probability of finishing inside the guesses left, then (2) expected guesses. This lets it pick a non-answer probe that splits a swap family instead of guessing its members one at a time. The search is capped at 2 million feedback evaluations and falls back to the entropy ranking if it runs out; Hard Mode legality is enforced at every level of the tree.
+- **Last guess.** With one guess left only a live candidate can win, so probes are never suggested.
+
+Benchmark over all 2,315 original answers (Entrople's own play, answer list as the candidate pool):
+
+| Mode | Before | After |
+| --- | --- | --- |
+| Normal | 3.479 avg, 67 five-guess games | 3.429 avg, 40 five-guess games, 2 six-guess wins |
+| Hard | 3.586 avg, 16 failures | 3.513 avg, 3 failures |
+
+The proven optimum for Normal mode is 3.421. The remaining Hard Mode failures are `_OUND` swap families where Hard Mode forbids a probe. A six-guess finish is still a win: the search guarantees finishing inside the limit and minimizes the average, not the worst case.
+
+## Step-through entry
+The Solve Analyzer works like a Wordle board. Type the answer and press ENTER, then type each guess and press ENTER to lock it in. Colors are computed from the answer, the keyboard tracks letter states, and after every guess you see how far the live pool narrowed. "Show Entrople's pick" reveals what the engine would play for the guess you are about to make (nothing is shown unless you ask). Works with the physical or on-screen keyboard; UNDO steps back one guess, EXAMPLE loads a sample solve.
+
 ## Verification
 
 Run the core feedback, Hard Mode, and ranking checks with:
@@ -73,6 +92,10 @@ node tests/core.test.js
 [Kullback-Leibler divergence](https://en.wikipedia.org/wiki/Kullback%E2%80%93Leibler_divergence) - used to measure how far a guess's pattern distribution is from uniform
 
 [Alex Selby](https://github.com/alex1770) - [Score calculator](https://github.com/alex1770/wordle) author, whose bucket-based scoring approach informed the feedback-bucketing math here
+
+[Dimitris Bertsimas and Alex Paskov](https://pubsonline.informs.org/doi/10.1287/opre.2022.0434) - "An Exact Solution to Wordle" (Operations Research, 2025), source of the SALET opening book and the expected-guesses objective behind the exact endgame
+
+[Michael Cunanan and Michael Thielscher](https://arxiv.org/abs/2305.09111) - "On Optimal Strategies for Wordle and General Guessing Games" (IJCAI 2023), independent proof of SALET as the optimal opener
 
 [Alexander D. Healy](http://www.alexhealy.net/) - ["On Optimal Strategies for Wordle"](http://www.alexhealy.net/papers/wordle.pdf), source of the win-bonus correction (rewarding a guess that could itself be the answer) used in Entrople's best-guess ranking
 

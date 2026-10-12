@@ -60,7 +60,8 @@ function simulateOptimalSolve(answer) {
         candidates,
         1,
         solveMode === "hard" ? hardHistory : null,
-        words.guesses
+        words.guesses,
+        { guessesLeft: 7 - guessNum }
       );
       guess = best.top[0].word;
       bits = best.top[0].bits;
@@ -110,7 +111,8 @@ function simulateOptimalSolveDeep(
         candidates,
         1,
         hardMode ? hardHistory : null,
-        fullDictionary
+        fullDictionary,
+        { guessesLeft: 7 - guessNum }
       );
       guess = best.top[0].word;
       profile = guessPartitionProfile(guess, candidates);
@@ -190,7 +192,9 @@ function simulateGameFromOpener(answer, opener, answerPool, fullDictionary, hard
     } else if (candidates.length === 1) {
       guess = candidates[0];
     } else {
-      const best = findBestGuesses(candidates, 1, hardMode ? hardHistory : null, fullDictionary);
+      const best = findBestGuesses(candidates, 1, hardMode ? hardHistory : null, fullDictionary, {
+        guessesLeft: 7 - guessNum,
+      });
       guess = best.top[0].word;
     }
 
