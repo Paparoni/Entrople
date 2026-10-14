@@ -220,5 +220,11 @@
     "solution": "wider",
     "print_date": "2026-10-13",
     "days_since_launch": 1942
+  },
+  "2026-10-14": {
+    "id": 2392,
+    "solution": "psych",
+    "print_date": "2026-10-14",
+    "days_since_launch": 1943
   }
 }
