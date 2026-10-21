@@ -262,5 +262,11 @@
     "solution": "wrest",
     "print_date": "2026-10-20",
     "days_since_launch": 1949
+  },
+  "2026-10-21": {
+    "id": 1938,
+    "solution": "penny",
+    "print_date": "2026-10-21",
+    "days_since_launch": 1950
   }
 }
