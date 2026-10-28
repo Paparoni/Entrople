@@ -304,5 +304,11 @@
     "solution": "bingo",
     "print_date": "2026-10-27",
     "days_since_launch": 1956
+  },
+  "2026-10-28": {
+    "id": 4821,
+    "solution": "grist",
+    "print_date": "2026-10-28",
+    "days_since_launch": 1957
   }
 }
