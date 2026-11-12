@@ -394,5 +394,11 @@
     "solution": "bless",
     "print_date": "2026-11-11",
     "days_since_launch": 1971
+  },
+  "2026-11-12": {
+    "id": 5201,
+    "solution": "karat",
+    "print_date": "2026-11-12",
+    "days_since_launch": 1972
   }
 }
