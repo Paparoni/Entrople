@@ -400,5 +400,11 @@
     "solution": "karat",
     "print_date": "2026-11-12",
     "days_since_launch": 1972
+  },
+  "2026-11-13": {
+    "id": 4745,
+    "solution": "moxie",
+    "print_date": "2026-11-13",
+    "days_since_launch": 1973
   }
 }
