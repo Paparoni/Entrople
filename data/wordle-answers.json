@@ -430,5 +430,11 @@
     "solution": "roast",
     "print_date": "2026-11-17",
     "days_since_launch": 1977
+  },
+  "2026-11-18": {
+    "id": 2629,
+    "solution": "blurt",
+    "print_date": "2026-11-18",
+    "days_since_launch": 1978
   }
 }
