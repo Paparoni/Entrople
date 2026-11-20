@@ -442,5 +442,11 @@
     "solution": "clout",
     "print_date": "2026-11-19",
     "days_since_launch": 1979
+  },
+  "2026-11-20": {
+    "id": 1227,
+    "solution": "arose",
+    "print_date": "2026-11-20",
+    "days_since_launch": 1980
   }
 }
