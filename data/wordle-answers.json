@@ -454,5 +454,11 @@
     "solution": "stent",
     "print_date": "2026-11-21",
     "days_since_launch": 1981
+  },
+  "2026-11-22": {
+    "id": 4823,
+    "solution": "upend",
+    "print_date": "2026-11-22",
+    "days_since_launch": 1982
   }
 }
